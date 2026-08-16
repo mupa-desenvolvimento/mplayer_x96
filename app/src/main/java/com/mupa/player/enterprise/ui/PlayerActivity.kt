@@ -9,6 +9,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
+import android.os.SystemClock
 import android.graphics.Color
 import android.Manifest
 import android.content.pm.PackageManager
@@ -54,7 +55,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import com.mupa.player.enterprise.services.DeviceCommandService
+import com.mupa.player.enterprise.network.RealtimeCommandChannel
+import kotlin.random.Random
 import org.json.JSONObject
 
 class PlayerActivity : ComponentActivity() {
@@ -78,6 +84,24 @@ class PlayerActivity : ComponentActivity() {
     private var syncHideJob: Job? = null
     private var devMode = false
     private var demoMode = false
+
+    private val commandService = DeviceCommandService()
+
+    /** Identificadores pelos quais o Mupa Connect pode endereçar este device em `device_commands`. */
+    private var deviceIdentifiers: List<String> = emptyList()
+
+    /**
+     * Serializa todo acesso ao download de mídias. Sem isso, o ciclo periódico, o comando
+     * `reload_playlist` e o prefetch podem baixar o mesmo arquivo ao mesmo tempo e corromper
+     * o `.tmp` compartilhado em ManifestManager.downloadToFile().
+     */
+    private val syncMutex = Mutex()
+
+    /** Impede que o polling e o push em tempo real processem a mesma pendência em paralelo. */
+    private val commandMutex = Mutex()
+
+    /** Conexão única do Realtime — ver comentário na criação, em [startLoop]. */
+    private var realtimeJob: Job? = null
 
     private var storagePermissionDeferred: CompletableDeferred<Boolean>? = null
     private val storagePermissionLauncher =
@@ -119,6 +143,7 @@ class PlayerActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val startedScope = this
                 launch {
                     applyImmersive()
                 }
@@ -139,7 +164,7 @@ class PlayerActivity : ComponentActivity() {
                         }
                     }
                 }
-                launch { startLoop() }
+                launch { startLoop(startedScope) }
             }
         }
     }
@@ -192,7 +217,7 @@ class PlayerActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private suspend fun startLoop() {
+    private suspend fun startLoop(scope: CoroutineScope) {
         deviceId = intent.getStringExtra(EXTRA_DEVICE_ID)?.trim().orEmpty()
         if (deviceId.isBlank()) {
             deviceId = DeviceIdentityManager(applicationContext).getPersistentId().trim()
@@ -207,35 +232,173 @@ class PlayerActivity : ComponentActivity() {
         binding.deviceNameText.text = cache?.deviceName?.ifBlank { deviceId } ?: deviceId
         companyId = cache?.company?.trim()?.ifBlank { null }
 
-        ensureStoragePermissionIfNeeded()
-        tryStartOfflinePlayback()
-        initialSyncAndPlayback()
+        // `device_commands.device_id` é TEXT livre no Mupa Connect (serial, apelido interno ou
+        // id do dispositivo), então consultamos por todos os identificadores que conhecemos.
+        deviceIdentifiers = listOfNotNull(
+            deviceId,
+            cache?.deviceId,
+            cache?.deviceName,
+            cache?.deviceDbId?.takeIf { it > 0L }?.toString(),
+        ).map { it.trim() }.filter { it.isNotBlank() }.distinct()
 
-        lifecycleScope.launch {
-            while (true) {
-                delay(60 * 1000L)
-                updatePlaylistIfActiveItemsChanged()
-            }
+        ensureStoragePermissionIfNeeded()
+
+        // Os loops periódicos são criados ANTES da sincronização inicial: a atualização
+        // automática não pode depender do sucesso da carga inicial. Rodam no escopo do
+        // repeatOnLifecycle, então são cancelados no STOP e recriados no START — sem acúmulo.
+        scope.launch { activeItemsLoop() }
+        scope.launch { remoteRefreshLoop() }
+        scope.launch { commandPollLoop() }
+
+        // O socket do Realtime é a exceção: vive no lifecycleScope (morre só no onDestroy) e não
+        // no escopo do repeatOnLifecycle, com guarda de instância única.
+        //
+        // Antes ele nascia junto com os demais loops e, num STOP/START rápido na inicialização,
+        // duas instâncias subiam com ~12s de diferença. A segunda ficava saudável; a primeira
+        // ficava órfã, sem heartbeat, e o servidor a derrubava a cada 60s — churn de reconexão
+        // que só cessava quando as sobras se esgotavam, ~9 minutos depois.
+        //
+        // Manter o socket fora do ciclo STOP/START também evita reconectar à toa toda vez que o
+        // player passa para segundo plano (abrir as Configurações, por exemplo).
+        if (realtimeJob?.isActive != true) {
+            realtimeJob = lifecycleScope.launch { realtimeCommandLoop() }
         }
 
-        lifecycleScope.launch {
-            while (true) {
-                delay(60 * 60 * 1000L) // Wait 1 hour between checks
-                var success = false
+        tryStartOfflinePlayback()
+        initialSyncAndPlayback()
+    }
+
+    /** Reavalia a vigência (data / faixa horária) dos itens já baixados localmente. */
+    private suspend fun activeItemsLoop() {
+        while (true) {
+            delay(ACTIVE_ITEMS_CHECK_MS)
+            runCatching { updatePlaylistIfActiveItemsChanged() }
+                .onFailure { Log.e(TAG_SYNC, "active_items_check_failed", it) }
+        }
+    }
+
+    /**
+     * Canal de push do Mupa Connect: consome `device_commands` com `command = reload_playlist`.
+     * É a Opção B do manual de integração (polling REST), que também é o caminho obrigatório de
+     * inicialização e reconexão caso o Realtime seja adotado depois.
+     */
+    private suspend fun commandPollLoop() {
+        if (deviceIdentifiers.isEmpty()) {
+            Log.w(TAG_SYNC, "command_poll_disabled: nenhum identificador de device conhecido")
+            return
+        }
+        // Varredura imediata na inicialização — comandos enfileirados enquanto o device esteve
+        // desligado precisam ser aplicados assim que ele volta, sem esperar o primeiro intervalo.
+        while (true) {
+            runCatching { processPendingCommands() }
+                .onFailure { Log.w(TAG_SYNC, "command_poll_failed", it) }
+            delay(COMMAND_POLL_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * Canal de push em tempo real. Cada INSERT em `device_commands` dispara a mesma varredura de
+     * pendências do polling — o polling continua ativo como rede de segurança para quando o
+     * socket estiver caído ou o Realtime não estiver habilitado no backend.
+     */
+    private suspend fun realtimeCommandLoop() {
+        if (deviceIdentifiers.isEmpty()) return
+        RealtimeCommandChannel(
+            onCommandInserted = {
+                lifecycleScope.launch {
+                    runCatching { processPendingCommands() }
+                        .onFailure { Log.w(TAG_SYNC, "realtime_sweep_failed", it) }
+                }
+            },
+        ).run()
+    }
+
+    /**
+     * Mantém o indicador de sincronização visível durante [block].
+     *
+     * Quando há mídia tocando, [setSyncOverlayVisible] já escolhe o card compacto no rodapé —
+     * é ele que aparece aqui. A tela cheia só entra quando não há nada reproduzindo, caso em que
+     * não há o que ser discreto sobre.
+     *
+     * Sem isso o usuário fica sem retorno entre o comando chegar e o download começar: o
+     * indicador interno de `refreshInBackground` só sobe depois que o manifesto é baixado
+     * e comparado.
+     */
+    private suspend fun <T> withSyncIndicator(status: String, block: suspend () -> T): T {
+        setSyncOverlayVisible(true)
+        updateSyncTexts(
+            status = status,
+            countText = "",
+            fileText = "",
+            detailText = "",
+            progressPercent = null,
+        )
+        try {
+            return block()
+        } finally {
+            setSyncOverlayVisible(false)
+        }
+    }
+
+    /** Ciclo da seção 4 do manual: `pending` → `ack` → aplica → `done` / `error` → log. */
+    private suspend fun processPendingCommands() = commandMutex.withLock {
+        if (!isOnline()) return@withLock
+
+        val pending = commandService.fetchPending(
+            identifiers = deviceIdentifiers,
+            command = DeviceCommandService.COMMAND_RELOAD_PLAYLIST,
+        )
+        if (pending.isEmpty()) return@withLock
+
+        Log.i(TAG_SYNC, "reload_playlist recebido: ${pending.size} comando(s) pendente(s)")
+        for (cmd in pending) {
+            val startedAt = SystemClock.elapsedRealtime()
+            commandService.acknowledge(cmd.id)
+
+            val ok = runCatching { withSyncIndicator(STATUS_UPDATING_PLAYLIST) { refreshInBackground() } }
+                .onFailure { Log.e(TAG_SYNC, "reload_playlist_failed commandId=${cmd.id}", it) }
+                .getOrDefault(false)
+
+            val durationMs = SystemClock.elapsedRealtime() - startedAt
+            commandService.complete(
+                commandId = cmd.id,
+                ok = ok,
+                errorMessage = if (ok) null else "manifest_sync_incomplete",
+            )
+            commandService.logExecution(
+                deviceId = cmd.deviceId.ifBlank { deviceId },
+                commandId = cmd.id,
+                command = cmd.command,
+                ok = ok,
+                durationMs = durationMs,
+            )
+            Log.i(TAG_SYNC, "reload_playlist commandId=${cmd.id} ok=$ok durationMs=$durationMs")
+        }
+    }
+
+    /**
+     * Verificação remota do manifesto. Primeiro ciclo poucos minutos após o start; depois
+     * intervalo sorteado dentro da janela configurada (jitter, para não sincronizar a frota
+     * inteira no mesmo instante). Falha aplica backoff exponencial em vez de prender o loop.
+     */
+    private suspend fun remoteRefreshLoop() {
+        delay(FIRST_REFRESH_DELAY_MS)
+        var backoffMs = REFRESH_RETRY_BASE_MS
+        while (true) {
+            val success =
                 try {
-                    success = refreshInBackground()
+                    refreshInBackground()
                 } catch (e: Exception) {
-                    Log.e("PlayerActivity", "Error in background refresh", e)
+                    Log.e(TAG_SYNC, "background_refresh_failed", e)
+                    false
                 }
-                
-                while (!success) {
-                    delay(10 * 60 * 1000L) // retry in 10 minutes
-                    try {
-                        success = refreshInBackground()
-                    } catch (e: Exception) {
-                        Log.e("PlayerActivity", "Error in background refresh retry", e)
-                    }
-                }
+
+            if (success) {
+                backoffMs = REFRESH_RETRY_BASE_MS
+                delay(Random.nextLong(REFRESH_INTERVAL_MIN_MS, REFRESH_INTERVAL_MAX_MS))
+            } else {
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(REFRESH_RETRY_MAX_MS)
             }
         }
     }
@@ -401,85 +564,140 @@ class PlayerActivity : ComponentActivity() {
                 .trim()
         }
 
-        val changed = !manifestManager.compareManifest(deviceId, remote)
-        if (changed) {
-            manifestManager.saveManifest(deviceId, remote)
-        }
-
-        playlistName = manifestManager.parsePlaylistName(remote) ?: playlistName
-        itemNameById = manifestManager.parseItemsPublic(remote).mapNotNull { it.name?.let { n -> it.id to n } }.toMap()
-        applyTransitionConfigFromManifestJson(remote)
-
-        val items = manifestManager.parseItemsPublic(remote)
-        var playlist = buildLocalPlaylist(items)
-        if (playlist.size == items.size) {
-            playerEngine.setPlaylist(playlist)
-            setSyncOverlayVisible(false)
-            lifecycleScope.launch {
-                runCatching {
-                    manifestManager.syncMedia(
-                        deviceId = deviceId,
-                        manifestJson = remote,
-                        onProgress = null,
-                        maxConcurrentDownloads = 1,
-                    )
-                }
+        syncMutex.withLock {
+            val changed = !manifestManager.compareManifest(deviceId, remote)
+            if (changed) {
+                manifestManager.saveManifest(deviceId, remote)
             }
-            return
-        }
 
-        runCatching {
-            manifestManager.syncMedia(
-                deviceId = deviceId,
-                manifestJson = remote,
-                onProgress = { p -> runOnUiThread { renderProgress(p) } },
-                maxConcurrentDownloads = 1,
-            )
-        }
+            playlistName = manifestManager.parsePlaylistName(remote) ?: playlistName
+            itemNameById = manifestManager.parseItemsPublic(remote).mapNotNull { it.name?.let { n -> it.id to n } }.toMap()
+            applyTransitionConfigFromManifestJson(remote)
 
-        playlist = buildLocalPlaylist(items)
-        while (playlist.size < items.size) {
-            val missing = (items.size - playlist.size).coerceAtLeast(0)
-            updateSyncTexts(
-                status = "Baixando conteúdos...",
-                countText = "Faltando $missing de ${items.size} mídias",
-                fileText = "",
-                detailText = "",
-                progressPercent = null,
+            val items = manifestManager.parseItemsPublic(remote)
+            val playlist = syncAndBuildPlaylist(
+                remoteJson = remote,
+                items = items,
+                showProgress = true,
+                maxAttempts = SYNC_ATTEMPTS_INITIAL,
             )
-            delay(2500L)
+            applyPlaylist(items, playlist)
+            setSyncOverlayVisible(false)
+        }
+        launchBackgroundMediaPrefetch(remote)
+    }
+
+    /**
+     * Baixa as mídias do manifesto e monta a playlist local.
+     *
+     * O critério de conclusão é o número de itens **ativos agora** (vigência de data e faixa
+     * horária), não o total de itens do manifesto: itens agendados para o futuro ou já
+     * expirados nunca entram na playlist e, se contados, travariam a sincronização para sempre.
+     *
+     * As tentativas são limitadas e com backoff — na pior hipótese seguimos com a playlist
+     * parcial e o ciclo de refresh remoto tenta de novo mais tarde.
+     */
+    private suspend fun syncAndBuildPlaylist(
+        remoteJson: String,
+        items: List<com.mupa.player.enterprise.managers.ManifestItem>,
+        showProgress: Boolean,
+        maxAttempts: Int,
+    ): List<PlayerEngine.PlaybackItem> {
+        val expected = items.count { isItemCurrentlyActive(it) }
+        var playlist = buildLocalPlaylist(items)
+        if (playlist.size >= expected) return playlist
+
+        val progressCallback: ((MediaSyncProgress) -> Unit)? =
+            if (showProgress) {
+                { p -> runOnUiThread { renderProgress(p) } }
+            } else {
+                null
+            }
+
+        var attempt = 0
+        var backoffMs = SYNC_RETRY_BASE_MS
+        while (playlist.size < expected && attempt < maxAttempts) {
+            attempt++
+            if (showProgress) {
+                val missing = (expected - playlist.size).coerceAtLeast(0)
+                updateSyncTexts(
+                    status = "Baixando conteúdos...",
+                    countText = "Faltando $missing de $expected mídias",
+                    fileText = "",
+                    detailText = "",
+                    progressPercent = null,
+                )
+            }
+
             runCatching {
                 manifestManager.syncMedia(
                     deviceId = deviceId,
-                    manifestJson = remote,
-                    onProgress = { p -> runOnUiThread { renderProgress(p) } },
+                    manifestJson = remoteJson,
+                    onProgress = progressCallback,
                     maxConcurrentDownloads = 1,
                 )
-            }
+            }.onFailure { Log.w(TAG_SYNC, "sync_media_failed attempt=$attempt", it) }
+
             playlist = buildLocalPlaylist(items)
+            if (playlist.size < expected) {
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(SYNC_RETRY_MAX_MS)
+            }
         }
-        playerEngine.setPlaylist(playlist)
-        setSyncOverlayVisible(false)
+
+        if (playlist.size < expected) {
+            Log.w(
+                TAG_SYNC,
+                "sync_incomplete active=$expected local=${playlist.size} attempts=$attempt deviceId=$deviceId",
+            )
+        }
+        return playlist
     }
 
-    private suspend fun refreshInBackground(): Boolean {
-        if (!isOnline()) return false
+    /**
+     * Baixa em segundo plano o que sobrou do manifesto (por exemplo campanhas ainda fora de
+     * vigência), para que já estejam em disco quando entrarem no ar. Não bloqueia a reprodução.
+     */
+    private fun launchBackgroundMediaPrefetch(remoteJson: String) {
+        lifecycleScope.launch {
+            syncMutex.withLock {
+                runCatching {
+                    manifestManager.syncMedia(
+                        deviceId = deviceId,
+                        manifestJson = remoteJson,
+                        onProgress = null,
+                        maxConcurrentDownloads = 1,
+                    )
+                }.onFailure { Log.w(TAG_SYNC, "prefetch_failed deviceId=$deviceId", it) }
+            }
+        }
+    }
+
+    private suspend fun refreshInBackground(): Boolean = syncMutex.withLock {
+        if (!isOnline()) return@withLock false
         runCatching {
             com.mupa.player.enterprise.services.DeviceValidationService(applicationContext).validateDevice(deviceId)
         }
 
         val remote = runCatching { manifestManager.fetchManifest(deviceId) }.getOrNull()?.trim()
-        if (remote.isNullOrBlank()) return false
+        if (remote.isNullOrBlank()) return@withLock false
         val changed = !manifestManager.compareManifest(deviceId, remote)
-        if (!changed) return true
+        if (!changed) {
+            Log.i(TAG_SYNC, "manifest_unchanged deviceId=$deviceId")
+            return@withLock true
+        }
 
         manifestManager.saveManifest(deviceId, remote)
         playlistName = manifestManager.parsePlaylistName(remote) ?: playlistName
         itemNameById = manifestManager.parseItemsPublic(remote).mapNotNull { it.name?.let { n -> it.id to n } }.toMap()
         applyTransitionConfigFromManifestJson(remote)
+
+        // Sinaliza na tela assim que a diferença é detectada — antes de qualquer download.
+        // É o "tem algo pra trocar": o card sobe no rodapé e só sai quando a troca conclui.
+        Log.i(TAG_SYNC, "nova programação detectada no servidor — iniciando troca")
         setSyncOverlayVisible(true)
         updateSyncTexts(
-            status = "Sincronizando conteúdos...",
+            status = STATUS_NEW_PLAYLIST_FOUND,
             countText = "",
             fileText = "",
             detailText = "",
@@ -487,80 +705,63 @@ class PlayerActivity : ComponentActivity() {
         )
 
         val items = manifestManager.parseItemsPublic(remote)
-        var playlist = buildLocalPlaylist(items)
-        if (playlist.size == items.size) {
-            playerEngine.setPlaylist(playlist)
-            setSyncOverlayVisible(false)
-            val bgSync = runCatching {
-                manifestManager.syncMedia(
-                    deviceId = deviceId,
-                    manifestJson = remote,
-                    onProgress = null,
-                    maxConcurrentDownloads = 1,
-                )
-            }
-            return bgSync.isSuccess
-        }
-
-        runCatching {
-            manifestManager.syncMedia(
-                deviceId = deviceId,
-                manifestJson = remote,
-                onProgress = { p -> runOnUiThread { renderProgress(p) } },
-                maxConcurrentDownloads = 1,
-            )
-        }
-
-        playlist = buildLocalPlaylist(items)
-        var attempts = 0
-        while (playlist.size < items.size && attempts < 3) {
-            attempts++
-            val missing = (items.size - playlist.size).coerceAtLeast(0)
-            updateSyncTexts(
-                status = "Baixando conteúdos...",
-                countText = "Faltando $missing de ${items.size} mídias",
-                fileText = "",
-                detailText = "",
-                progressPercent = null,
-            )
-            delay(2500L)
-            runCatching {
-                manifestManager.syncMedia(
-                    deviceId = deviceId,
-                    manifestJson = remote,
-                    onProgress = { p -> runOnUiThread { renderProgress(p) } },
-                    maxConcurrentDownloads = 1,
-                )
-            }
-            playlist = buildLocalPlaylist(items)
-        }
-        playerEngine.setPlaylist(playlist)
+        val playlist = syncAndBuildPlaylist(
+            remoteJson = remote,
+            items = items,
+            showProgress = true,
+            maxAttempts = SYNC_ATTEMPTS_BACKGROUND,
+        )
+        applyPlaylist(items, playlist)
         setSyncOverlayVisible(false)
-        return playlist.size == items.size
+        launchBackgroundMediaPrefetch(remote)
+
+        return@withLock playlist.size >= items.count { isItemCurrentlyActive(it) }
+    }
+
+    /**
+     * Normaliza uma data de vigência para `yyyy-MM-dd`.
+     *
+     * O backend pode devolver tanto `"2026-08-13"` quanto um timestamptz completo
+     * (`"2026-08-13T00:00:00+00:00"`). Como a comparação é lexicográfica, o segundo formato
+     * quebrava o **primeiro dia** da campanha: `"2026-08-13" < "2026-08-13T00:00:00"` é `true`,
+     * então o item só entrava no ar no dia seguinte ao configurado.
+     */
+    private fun normalizeScheduleDate(raw: String): String? {
+        val s = raw.trim()
+        if (s.length < 10) return null
+        val head = s.substring(0, 10)
+        return if (head.length == 10 && head[4] == '-' && head[7] == '-') head else null
+    }
+
+    /** Normaliza uma faixa horária para `HH:mm:ss`, aceitando `HH:mm` e `H:mm`. */
+    private fun normalizeScheduleTime(raw: String): String? {
+        val parts = raw.trim().split(":")
+        if (parts.size < 2) return null
+        val h = parts[0].trim().padStart(2, '0')
+        val m = parts[1].trim().padStart(2, '0')
+        val s = parts.getOrNull(2)?.trim()?.padStart(2, '0') ?: "00"
+        if (h.length != 2 || m.length != 2 || s.length != 2) return null
+        return "$h:$m:$s"
     }
 
     private fun isItemCurrentlyActive(item: com.mupa.player.enterprise.managers.ManifestItem): Boolean {
         val now = Date()
 
-        // 1. Validar Vigência por Data (AAAA-MM-DD)
+        // 1. Validar Vigência por Data (AAAA-MM-DD, no fuso do dispositivo)
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val todayStr = dateFmt.format(now)
 
-        val startD = item.startDate?.trim()
-        val endD = item.endDate?.trim()
+        val startD = item.startDate?.trim()?.takeIf { it.isNotBlank() }?.let { normalizeScheduleDate(it) }
+        val endD = item.endDate?.trim()?.takeIf { it.isNotBlank() }?.let { normalizeScheduleDate(it) }
 
-        if (!startD.isNullOrBlank()) {
-            if (todayStr < startD) return false
-        }
-        if (!endD.isNullOrBlank()) {
-            if (todayStr > endD) return false
-        }
+        if (startD != null && todayStr < startD) return false
+        if (endD != null && todayStr > endD) return false
 
         // 2. Validar Faixa Horária (HH:MM:SS)
-        val startT = item.startTime?.trim()
-        val endT = item.endTime?.trim()
+        val startT = item.startTime?.trim()?.takeIf { it.isNotBlank() }?.let { normalizeScheduleTime(it) }
+        val endT = item.endTime?.trim()?.takeIf { it.isNotBlank() }?.let { normalizeScheduleTime(it) }
 
-        if (!startT.isNullOrBlank() || !endT.isNullOrBlank()) {
+        if (startT != null || endT != null) {
             val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
             val timeStr = timeFmt.format(now)
 
@@ -570,6 +771,7 @@ class PlayerActivity : ComponentActivity() {
             if (minT <= maxT) {
                 if (timeStr < minT || timeStr > maxT) return false
             } else {
+                // Faixa que cruza a meia-noite (ex.: 22:00:00 → 06:00:00).
                 if (timeStr < minT && timeStr > maxT) return false
             }
         }
@@ -577,20 +779,47 @@ class PlayerActivity : ComponentActivity() {
         return true
     }
 
-    private fun updatePlaylistIfActiveItemsChanged() {
-        lifecycleScope.launch {
-            val offlineJson = manifestManager.loadOfflineManifest(deviceId).orEmpty().trim()
-            if (offlineJson.isBlank()) return@launch
-            val items = manifestManager.parseItemsPublic(offlineJson)
-            val activeItems = items.filter { isItemCurrentlyActive(it) }
-            val activeIds = activeItems.map { it.id }
-            if (activeIds != lastPlaylistItemsIds) {
-                lastPlaylistItemsIds = activeIds
-                val playlist = buildLocalPlaylist(items)
-                playerEngine.setPlaylist(playlist)
-                Log.i("MPlayerPlaylist", "Playlist updated dynamically due to time/date change. Active items count: ${playlist.size}")
-            }
+    /**
+     * Aplica a playlist e mantém [lastPlaylistItemsIds] em sincronia.
+     *
+     * Sem isso, `updatePlaylistIfActiveItemsChanged` enxergava um falso "mudou" no primeiro tick
+     * após cada sincronização remota e reaplicava a playlist — e como o hot-swap reseta o índice
+     * para 0, a programação voltava visivelmente para o primeiro item logo depois de todo sync.
+     */
+    private fun applyPlaylist(
+        items: List<com.mupa.player.enterprise.managers.ManifestItem>,
+        playlist: List<PlayerEngine.PlaybackItem>,
+    ) {
+        lastPlaylistItemsIds = items.filter { isItemCurrentlyActive(it) }.map { it.id }
+        playerEngine.setPlaylist(playlist)
+    }
+
+    private suspend fun updatePlaylistIfActiveItemsChanged() {
+        val offlineJson = manifestManager.loadOfflineManifest(deviceId).orEmpty().trim()
+        if (offlineJson.isBlank()) return
+        val items = manifestManager.parseItemsPublic(offlineJson)
+        val activeItems = items.filter { isItemCurrentlyActive(it) }
+        val activeIds = activeItems.map { it.id }
+        if (activeIds == lastPlaylistItemsIds) return
+
+        val playlist = buildLocalPlaylist(items)
+        if (playlist.isEmpty()) {
+            // PlaylistEngine.setPlaylist ignora lista vazia, então a programação anterior
+            // continuaria no ar mesmo fora de vigência. Registrado para não passar silencioso.
+            Log.w(
+                TAG_SYNC,
+                "agendamento: nenhum item vigente agora (antes: ${lastPlaylistItemsIds.size}); " +
+                    "a programação anterior segue em exibição",
+            )
+            lastPlaylistItemsIds = activeIds
+            return
         }
+
+        applyPlaylist(items, playlist)
+        Log.i(
+            "MPlayerPlaylist",
+            "agendamento: programação trocada por vigência de data/hora — ${playlist.size} item(ns) no ar",
+        )
     }
 
     private suspend fun buildLocalPlaylist(items: List<com.mupa.player.enterprise.managers.ManifestItem>): List<PlayerEngine.PlaybackItem> {
@@ -956,6 +1185,47 @@ class PlayerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_DEVICE_ID = "extra_device_id"
+
+        private const val TAG_SYNC = "MPlayerSync"
+
+        /** Texto do indicador discreto enquanto um `reload_playlist` está sendo aplicado. */
+        private const val STATUS_UPDATING_PLAYLIST = "Atualizando programação..."
+
+        /** Texto exibido no instante em que uma programação diferente é detectada no servidor. */
+        private const val STATUS_NEW_PLAYLIST_FOUND = "Nova programação disponível — atualizando..."
+
+        /** Primeira verificação remota após o start. */
+        private const val FIRST_REFRESH_DELAY_MS = 2 * 60 * 1000L
+
+        /**
+         * Janela do intervalo entre verificações remotas; sorteado a cada ciclo (jitter de frota).
+         *
+         * Curto de propósito: o push via `device_commands` está bloqueado pela RLS, então o
+         * polling do manifesto é hoje o único caminho para detectar troca de playlist. A
+         * requisição é um POST pequeno que devolve só o JSON do manifesto — o custo real da
+         * sincronização é o download das mídias, que só acontece quando algo mudou de fato.
+         */
+        private const val REFRESH_INTERVAL_MIN_MS = 60 * 1000L
+        private const val REFRESH_INTERVAL_MAX_MS = 120 * 1000L
+
+        /** Backoff exponencial quando a verificação remota falha. */
+        private const val REFRESH_RETRY_BASE_MS = 30 * 1000L
+        private const val REFRESH_RETRY_MAX_MS = 10 * 60 * 1000L
+
+        /** Reavaliação da vigência (data / faixa horária) dos itens já baixados. */
+        private const val ACTIVE_ITEMS_CHECK_MS = 60 * 1000L
+
+        /**
+         * Rede de segurança do canal de push: a primeira varredura é imediata (no start) e
+         * este é o intervalo entre as seguintes. A entrega rápida vem do Realtime.
+         */
+        private const val COMMAND_POLL_INTERVAL_MS = 15 * 1000L
+
+        /** Tentativas de download antes de seguir com a playlist parcial. */
+        private const val SYNC_ATTEMPTS_INITIAL = 8
+        private const val SYNC_ATTEMPTS_BACKGROUND = 3
+        private const val SYNC_RETRY_BASE_MS = 2_500L
+        private const val SYNC_RETRY_MAX_MS = 30_000L
     }
 }
 
