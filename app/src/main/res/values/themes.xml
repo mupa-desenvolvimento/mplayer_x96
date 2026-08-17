@@ -9,6 +9,20 @@
         <item name="android:windowBackground">@color/enterprise_bg</item>
     </style>
 
+    <!-- Linha de "últimas chamadas" na tela cheia da chamada. -->
+    <style name="QueueScreenHistoryRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">0dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">@color/queue_panel_white</item>
+        <item name="android:textSize">30sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:visibility">invisible</item>
+    </style>
+
     <style name="Theme.MupaPlayerEnterprise.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/enterprise_bg</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_mplayer</item>

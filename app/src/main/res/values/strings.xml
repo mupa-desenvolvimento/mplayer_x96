@@ -2,4 +2,38 @@
 <resources>
     <string name="app_name">MPlayer_x96</string>
     <string name="reconnecting">Reconectando...</string>
+
+    <!-- MUPA Queue — camada de fila da TV -->
+    <string name="queue_last_calls">ÚLTIMAS CHAMADAS</string>
+    <string name="queue_call_label">SENHA</string>
+    <string name="queue_qr_hint">Acompanhe sua senha pelo celular — QR Code no seu comprovante</string>
+    <string name="queue_stale_badge">SEM CONEXÃO — FILA DESATUALIZADA</string>
+    <string name="queue_waiting_count">%d aguardando</string>
+    <string name="queue_empty">Nenhuma senha aguardando</string>
+    <string name="queue_at_start">Início do histórico do dia</string>
+    <string name="queue_no_current">Nenhuma senha foi chamada ainda</string>
+    <string name="queue_offline_action">Sem conexão — chamada não enviada</string>
+    <string name="queue_action_failed">Falha ao chamar a senha</string>
+    <string name="queue_unauthorized">Dispositivo não pareado para chamar senha</string>
+    <string name="queue_not_paired">Este aparelho ainda não foi pareado na fila. Configurações → MUPA Queue → Salvar e validar.</string>
+    <string name="queue_role_not_caller">Este aparelho está vinculado como %1$s, e só o papel CALLER chama senha.</string>
+    <string name="queue_sector_inactive">A fila deste setor está inativa.</string>
+    <string name="queue_keymap_incomplete">Faltam teclas capturadas: PLAY, NEXT e BACK precisam das três.</string>
+
+    <!-- MUPA Queue — tela cheia da chamada -->
+    <string name="queue_screen_current">SENHA ATUAL</string>
+    <string name="queue_screen_current_priority">SENHA PREFERENCIAL</string>
+    <string name="queue_screen_how_title">COMO FUNCIONA</string>
+    <string name="queue_screen_brand_caption">Aqui tem cuidado, tem economia e tem tudo que faz bem pra você.</string>
+    <string name="queue_screen_qr_text">Não quero esperar, escaneio o QR Code nos terminais de consulta de preço ou na etiqueta impressa no totem.</string>
+    <string name="queue_screen_feature_1">Atendimento rápido</string>
+    <string name="queue_screen_feature_2">Qualidade e confiança</string>
+    <string name="queue_screen_feature_3">Cuidado que você sente</string>
+    <string name="queue_screen_step_1">Retire sua senha</string>
+    <string name="queue_screen_step_2">Aguarde sua vez</string>
+    <string name="queue_screen_step_3">Sua senha será chamada na tela</string>
+
+    <!-- MUPA Queue — tela de configuração do controle -->
+    <string name="queue_setup_title">MUPA Queue — Configuração</string>
+    <string name="queue_setup_capture_hint">Aperte a tecla desejada no controle remoto</string>
 </resources>

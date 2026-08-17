@@ -60,6 +60,17 @@
             android:screenOrientation="fullUser"
             android:theme="@style/Theme.MupaPlayerEnterprise" />
 
+        <!--
+          Configuração do MUPA Queue. `exported="false"`: a tela pareia o dispositivo e grava o
+          segredo da fila, então nenhum app de fora pode abri-la, nem por intent explícita.
+        -->
+        <activity
+            android:name=".ui.QueueSetupActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="fullUser"
+            android:theme="@style/Theme.MupaPlayerEnterprise" />
+
         <receiver
             android:name=".ui.DevModeReceiver"
             android:exported="true"

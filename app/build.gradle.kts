@@ -74,6 +74,45 @@ android {
             "SUPABASE_REALTIME_URL",
             "\"wss://iurqddkuihjsmxubibao.supabase.co/realtime/v1/websocket\"",
         )
+
+        // MUPA Queue. Edge Function própria, com autenticação de dispositivo por serial + segredo
+        // (CONTRATO_API.md §1) — deliberadamente separada da anon key usada nas URLs acima.
+        // Sobrescrevível por `QUEUE_API_URL` em local.properties para apontar para staging.
+        buildConfigField(
+            "String",
+            "QUEUE_API_URL",
+            "\"${(getConfig("QUEUE_API_URL") ?: "https://iurqddkuihjsmxubibao.supabase.co/functions/v1/queue-api").trim()}\"",
+        )
+
+        // Imagem do espaço de marca/campanha da tela de chamada.
+        //
+        // Provisório e explicitamente um placeholder: o destino desse espaço é `queue_branding`
+        // (migration 20260817100000) e, na Fase 3, o Product Overlay da balança. Fica em
+        // BuildConfig para ser trocável por `local.properties` sem editar código.
+        buildConfigField(
+            "String",
+            "QUEUE_BRAND_IMAGE_URL",
+            "\"${(getConfig("QUEUE_BRAND_IMAGE_URL") ?: "https://product-data.raiadrogasil.io/images/7171552.webp").trim().escapeForBuildConfig()}\"",
+        )
+
+        // Azure Speech — voz da chamada de senha.
+        //
+        // A chave vem de `local.properties` (fora do git) e não tem default: build sem ela sai com
+        // o áudio desligado, e não com uma credencial embutida em código versionado.
+        //
+        // ISTO É ARRANJO DE BANCADA. A chave dentro do APK é extraível de qualquer aparelho da
+        // frota, e é a chave da subscrição inteira de Speech da Mupa. ARQUITETURA §8.3 define o
+        // destino: síntese no backend, reaproveitando o `tts_audio_cache` do Mupa Connect.
+        buildConfigField(
+            "String",
+            "AZURE_SPEECH_KEY",
+            "\"${(getConfig("AZURE_SPEECH_KEY") ?: "").trim().escapeForBuildConfig()}\"",
+        )
+        buildConfigField(
+            "String",
+            "AZURE_SPEECH_REGION",
+            "\"${(getConfig("AZURE_SPEECH_REGION") ?: "brazilsouth").trim()}\"",
+        )
     }
 
     signingConfigs {

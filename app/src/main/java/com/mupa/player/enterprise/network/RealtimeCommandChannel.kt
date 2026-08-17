@@ -34,8 +34,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * fora do ar.
  *
  * Pré-requisitos no backend, sem os quais o socket conecta mas nunca entrega nada:
- * - `device_commands` precisa estar na publication `supabase_realtime`;
+ * - a tabela observada precisa estar na publication `supabase_realtime`;
  * - a policy de RLS precisa permitir `SELECT` para o role usado pela anon key.
+ *
+ * Usado hoje em duas tabelas: `device_commands` (comandos do Mupa Connect) e `queue_events`
+ * (chamadas de senha do MUPA Queue). Cada tabela tem sua própria trava de conexão única.
  */
 class RealtimeCommandChannel(
     private val table: String = "device_commands",
@@ -58,9 +61,10 @@ class RealtimeCommandChannel(
             return
         }
 
-        // Trava de conexão única no processo. Não retorna cedo quando já há uma ativa: espera a
-        // vez. Retornar deixaria o canal sem ninguém caso a instância vigente fosse cancelada logo
-        // em seguida — o cenário oposto, e pior, do que o da duplicação.
+        // Trava de conexão única no processo, POR TABELA. Não retorna cedo quando já há uma ativa:
+        // espera a vez. Retornar deixaria o canal sem ninguém caso a instância vigente fosse
+        // cancelada logo em seguida — o cenário oposto, e pior, do que o da duplicação.
+        val connectionSlot = slotFor(table)
         var waitedForSlot = false
         while (!connectionSlot.compareAndSet(false, true)) {
             if (!waitedForSlot) {
@@ -230,10 +234,19 @@ class RealtimeCommandChannel(
         private const val TAG = "MPlayerRealtime"
 
         /**
-         * Garante uma única conexão por processo, mesmo que duas instâncias da Activity coexistam
-         * — a guarda por Job em PlayerActivity é por instância e não cobriria esse caso.
+         * Garante uma única conexão por processo **para cada tabela**, mesmo que duas instâncias da
+         * Activity coexistam — a guarda por Job em PlayerActivity é por instância e não cobriria
+         * esse caso.
+         *
+         * A trava é por tabela porque o player mantém dois canais simultâneos e independentes:
+         * `device_commands` (comandos do Mupa Connect) e `queue_events` (chamadas de senha do MUPA
+         * Queue). Uma trava única no processo faria o segundo canal esperar para sempre.
          */
-        private val connectionSlot = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val connectionSlots =
+            java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean>()
+
+        private fun slotFor(table: String): java.util.concurrent.atomic.AtomicBoolean =
+            connectionSlots.getOrPut(table) { java.util.concurrent.atomic.AtomicBoolean(false) }
         private const val SLOT_POLL_MS = 1_000L
         private const val HEARTBEAT_MS = 25_000L
         private const val BACKOFF_BASE_MS = 2_000L

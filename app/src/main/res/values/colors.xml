@@ -6,4 +6,24 @@
     <color name="enterprise_surface">#111926</color>
     <color name="enterprise_on">#E6EEF7</color>
     <color name="enterprise_on_muted">#A8B6C8</color>
+
+    <!--
+      MUPA Queue. Paleta provisória do MVP1: `queue_sector_config.layout_config` e a tabela
+      `queue_branding` (migration 20260817100000) já preveem identidade visual por loja, mas
+      resolvê-la na TV é entrega separada. Até lá, um tema só para toda a frota.
+    -->
+    <!-- Tela cheia da chamada (identidade clara, sobre o conteúdo) -->
+    <color name="queue_screen_bg">#EDF3FC</color>
+    <color name="queue_blue">#0E3E9B</color>
+    <color name="queue_blue_deep">#0B3B96</color>
+    <color name="queue_blue_light">#7FB3F0</color>
+    <color name="queue_panel_white">#FFFFFF</color>
+    <color name="queue_ink_muted">#5B7196</color>
+
+    <color name="queue_card_bg">#F2101822</color>
+    <color name="queue_accent">#00E5FF</color>
+    <color name="queue_priority">#FFB300</color>
+    <color name="queue_on">#FFFFFF</color>
+    <color name="queue_on_muted">#B9C7D6</color>
+    <color name="queue_stale">#FF7043</color>
 </resources>

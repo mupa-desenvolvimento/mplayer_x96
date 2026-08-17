@@ -120,6 +120,64 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- Card: MUPA Queue -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                app:cardBackgroundColor="@color/enterprise_surface"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#222C3D"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="6dp"
+                        android:text="MUPA Queue"
+                        android:textColor="@color/mupa_cyan"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:text="Pareamento do dispositivo na fila e captura das teclas do controle remoto."
+                        android:textColor="@color/enterprise_on_muted"
+                        android:textSize="12sp" />
+
+                    <!--
+                      Resumo em modo leitura. Fica FORA do PIN de propósito: conferir qual tecla
+                      chama a senha é diagnóstico de campo, e exigir segredo para isso faria o
+                      técnico abrir a tela protegida só para olhar. Alterar continua exigindo PIN.
+                    -->
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/txtQueueSummary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:lineSpacingExtra="3dp"
+                        android:textColor="@color/enterprise_on"
+                        android:textSize="13sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnQueueSetup"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Configurar fila e controle"
+                        android:textColor="@color/enterprise_on" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- Card 2: Filial / Loja -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
@@ -310,6 +368,7 @@
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
+
 
             <!-- Card 5: Ações do Manifesto e Sincronização -->
             <com.google.android.material.card.MaterialCardView

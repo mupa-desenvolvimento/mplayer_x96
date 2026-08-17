@@ -52,6 +52,16 @@
         </FrameLayout>
     </FrameLayout>
 
+    <!--
+      Camada de fila (MUPA Queue). Fica FORA do `playerContainer` e acima dele: o player nunca
+      sabe que ela existe, e é isso que garante que a chamada de senha não interrompa a mídia
+      (especificação §12). Abaixo do `syncOverlay` de propósito — durante uma troca de programação
+      a informação de sincronismo tem precedência.
+    -->
+    <include
+        android:id="@+id/queueLayer"
+        layout="@layout/view_queue_fullscreen" />
+
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/syncOverlay"
         android:layout_width="match_parent"

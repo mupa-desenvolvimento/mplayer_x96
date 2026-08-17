@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Passo do "Como funciona". Texto definido em código pelo QueueOverlayRenderer. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="6dp"
+    android:paddingEnd="6dp">
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/stepNumber"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:background="@drawable/bg_queue_step_badge"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:textColor="@color/queue_panel_white"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/stepText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_weight="1"
+        android:includeFontPadding="false"
+        android:maxLines="2"
+        android:textColor="@color/queue_panel_white"
+        android:textSize="12sp" />
+</LinearLayout>

@@ -60,6 +60,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import com.mupa.player.enterprise.services.DeviceCommandService
 import com.mupa.player.enterprise.network.RealtimeCommandChannel
+import com.mupa.player.enterprise.queue.QueueController
+import android.view.KeyEvent
 import kotlin.random.Random
 import org.json.JSONObject
 
@@ -103,6 +105,26 @@ class PlayerActivity : ComponentActivity() {
     /** Conexão única do Realtime — ver comentário na criação, em [startLoop]. */
     private var realtimeJob: Job? = null
 
+    /**
+     * Módulo MUPA Queue. Inerte em X96 sem credencial de fila — que é o caso da frota inteira
+     * hoje, então o player de mídia comum não paga nada por ele existir.
+     */
+    private var queueController: QueueController? = null
+
+    /**
+     * Receiver do gatilho de verificação do overlay em hardware.
+     *
+     * Registrado **dinamicamente**, e só em build depurável ou com devMode ligado — em APK de
+     * release da frota ele simplesmente não chega a existir. Não está no AndroidManifest de
+     * propósito: um receiver declarado existiria em produção mesmo desabilitado.
+     *
+     * Nota de campo: o `DevModeReceiver` é protegido por permissão `signature`, então `adb shell am
+     * broadcast` não consegue ligar o devMode de fora. Por isso a condição inclui
+     * `BuildConfig.DEBUG` — sem ela, verificar o overlay num X96 de bancada exigiria navegar a tela
+     * de Configurações pelo controle.
+     */
+    private var queueTestReceiver: BroadcastReceiver? = null
+
     private var storagePermissionDeferred: CompletableDeferred<Boolean>? = null
     private val storagePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
@@ -140,6 +162,13 @@ class PlayerActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {}
         })
+
+        queueController = QueueController(
+            context = applicationContext,
+            scope = lifecycleScope,
+            renderer = QueueOverlayRenderer(binding.queueLayer, lifecycleScope),
+            isOnline = ::isOnline,
+        )
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -213,6 +242,9 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        queueTestReceiver?.let { runCatching { unregisterReceiver(it) } }
+        queueTestReceiver = null
+        queueController?.stop()
         playerEngine.release()
         super.onDestroy()
     }
@@ -264,8 +296,89 @@ class PlayerActivity : ComponentActivity() {
             realtimeJob = lifecycleScope.launch { realtimeCommandLoop() }
         }
 
+        // O módulo de fila é (re)iniciado a cada ciclo STARTED, ao contrário do socket de
+        // `device_commands`: é assim que ele relê credencial e teclas depois de o operador sair da
+        // tela de configuração, sem precisar reiniciar o app. `start()` já encerra a instância
+        // anterior, então não acumula socket nem loop.
+        runCatching { queueController?.start() }
+            .onFailure { Log.w(TAG_SYNC, "queue_start_failed", it) }
+        registerQueueTestReceiverIfAllowed()
+
         tryStartOfflinePlayback()
         initialSyncAndPlayback()
+    }
+
+    /**
+     * Entrada das teclas do controle remoto no MUPA Queue.
+     *
+     * Fica na Activity, e não numa View, porque o X96 não tem toque e nada na camada de fila é
+     * focável — `dispatchKeyEvent` da Activity é o único ponto que enxerga a tecla antes de
+     * qualquer roteamento por foco.
+     *
+     * Devolve ao comportamento padrão sempre que o módulo estiver inerte: um X96 de mídia comum
+     * não pode ter o controle sequestrado por causa de código de fila que ele nem usa.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (queueController?.dispatchKeyEvent(event) == true) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * Registra o gatilho de verificação do overlay. Ver [queueTestReceiver] para o porquê da
+     * condição e do registro dinâmico.
+     *
+     * Uso, com o player em reprodução:
+     * ```
+     * adb shell am broadcast -a com.mupa.player.enterprise.ACTION_QUEUE_TEST_CALL \
+     *   --es number A123 --es sector "Farmácia" --ez priority false --el duration_ms 15000
+     * ```
+     */
+    private fun registerQueueTestReceiverIfAllowed() {
+        val allowed = BuildConfig.DEBUG || devMode
+        if (!allowed || queueTestReceiver != null) return
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    ACTION_QUEUE_TEST_CALL -> {
+                        val number = intent.getStringExtra("number")?.trim().orEmpty().ifBlank { "A123" }
+                        val sector = intent.getStringExtra("sector")?.trim().orEmpty().ifBlank { "Setor de teste" }
+                        val priority = intent.getBooleanExtra("priority", false)
+                        val durationMs = intent.getLongExtra("duration_ms", 5_000L)
+                        val withAudio = intent.getBooleanExtra("audio", true)
+                        val history = intent.getStringExtra("history")
+                            ?.split(',')
+                            ?.map { it.trim() }
+                            ?.filter { it.isNotBlank() }
+                            .orEmpty()
+                        val waiting = intent.getIntExtra("waiting", 0)
+                        Log.i(TAG_SYNC, "queue_test_call number=$number priority=$priority audio=$withAudio")
+                        queueController?.showTestCall(
+                            number = number,
+                            sectorName = sector,
+                            priority = priority,
+                            durationMs = durationMs,
+                            withAudio = withAudio,
+                            history = history,
+                            waitingCount = waiting,
+                        )
+                    }
+
+                    ACTION_QUEUE_TEST_HIDE -> {
+                        Log.i(TAG_SYNC, "queue_test_hide")
+                        queueController?.hideTestOverlay()
+                    }
+                }
+            }
+        }
+
+        val filter = android.content.IntentFilter().apply {
+            addAction(ACTION_QUEUE_TEST_CALL)
+            addAction(ACTION_QUEUE_TEST_HIDE)
+        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        queueTestReceiver = receiver
+        Log.i(TAG_SYNC, "queue_test_receiver_registrado debug=${BuildConfig.DEBUG} devMode=$devMode")
     }
 
     /** Reavalia a vigência (data / faixa horária) dos itens já baixados localmente. */
@@ -1187,6 +1300,10 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_DEVICE_ID = "extra_device_id"
 
         private const val TAG_SYNC = "MPlayerSync"
+
+        /** Gatilhos de verificação do overlay em hardware. Ver [queueTestReceiver]. */
+        const val ACTION_QUEUE_TEST_CALL = "com.mupa.player.enterprise.ACTION_QUEUE_TEST_CALL"
+        const val ACTION_QUEUE_TEST_HIDE = "com.mupa.player.enterprise.ACTION_QUEUE_TEST_HIDE"
 
         /** Texto do indicador discreto enquanto um `reload_playlist` está sendo aplicado. */
         private const val STATUS_UPDATING_PLAYLIST = "Atualizando programação..."

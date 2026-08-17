@@ -39,8 +39,57 @@ class SettingsActivity : ComponentActivity() {
         lifecycleScope.launch {
             deviceId = DeviceIdentityManager(applicationContext).getPersistentId().trim()
             loadDeviceInformation()
+            loadQueueSummary()
             setupListeners()
         }
+    }
+
+    /** Volta da tela de fila: o resumo precisa refletir o que acabou de ser capturado. */
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch { runCatching { loadQueueSummary() } }
+    }
+
+    /**
+     * Resumo do módulo de fila, em modo leitura.
+     *
+     * Mostra vínculo e teclas sem pedir PIN: saber qual botão chama a senha é diagnóstico, não
+     * alteração. Um técnico em loja precisa disso na mão — e a alternativa seria ele abrir a tela
+     * protegida (ou pior, ligar pedindo o PIN) só para conferir um keycode.
+     */
+    private suspend fun loadQueueSummary() {
+        val store = com.mupa.player.enterprise.queue.QueueStore(applicationContext)
+        val paired = runCatching { store.credentials() }.getOrNull() != null
+        val config = runCatching { store.cachedConfig() }.getOrNull()
+        val local = runCatching { store.localKeymap() }.getOrNull()
+            ?: com.mupa.player.enterprise.queue.QueueKeymap()
+
+        val keymap = com.mupa.player.enterprise.queue.QueueKeymap(
+            play = local.play ?: config?.keymap?.play,
+            next = local.next ?: config?.keymap?.next,
+            back = local.back ?: config?.keymap?.back,
+        )
+
+        fun key(code: Int?): String =
+            if (code == null) "não capturada"
+            else "${android.view.KeyEvent.keyCodeToString(code)} ($code)"
+
+        val text = buildString {
+            if (!paired) {
+                append("Dispositivo não pareado na fila.\n")
+            } else {
+                append("Setor: ").append(config?.sectorName?.ifBlank { "-" } ?: "-")
+                append("   Papel: ").append(config?.role?.name ?: "-").append('\n')
+            }
+            append("PLAY (rechamar): ").append(key(keymap.play)).append('\n')
+            append("NEXT (próxima): ").append(key(keymap.next)).append('\n')
+            append("BACK (voltar): ").append(key(keymap.back))
+            if (paired && !keymap.isComplete) {
+                append("\n\nO controle não chama senha enquanto as três teclas não forem capturadas.")
+            }
+        }
+
+        withContext(Dispatchers.Main) { binding.txtQueueSummary.text = text }
     }
 
     private suspend fun loadDeviceInformation() {
@@ -135,6 +184,10 @@ class SettingsActivity : ComponentActivity() {
                     it[androidx.datastore.preferences.core.booleanPreferencesKey("maintenance_mode")] = isChecked
                 }
             }
+        }
+
+        binding.btnQueueSetup.setOnClickListener {
+            startActivity(Intent(this, QueueSetupActivity::class.java))
         }
 
         binding.btnViewManifest.setOnClickListener {
