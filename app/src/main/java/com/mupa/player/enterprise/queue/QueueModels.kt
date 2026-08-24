@@ -95,6 +95,8 @@ data class QueueDeviceConfig(
     val audioEnabled: Boolean,
     val keymap: QueueKeymap,
     val serviceDate: String,
+    /** Identidade visual resolvida pelo servidor. Vazia quando a loja não configurou nada. */
+    val branding: QueueBranding = QueueBranding.NONE,
 ) {
     /** Só quem tem vínculo `CALLER` ativo responde a tecla — mitigação 1 de ARQUITETURA §8.1. */
     val canCall: Boolean get() = role == QueueRole.CALLER && isActive
@@ -108,6 +110,25 @@ data class QueueDeviceConfig(
         .put("overlay_duration_ms", overlayDurationMs)
         .put("audio_enabled", audioEnabled)
         .put("service_date", serviceDate)
+        .apply {
+            // O branding entra no cache junto: sem isto, um X96 que reinicia sem rede volta com o
+            // tema padrão e a loja aparece "errada" até a primeira resposta do servidor.
+            branding.takeIf { !it.isEmpty }?.let { b ->
+                put(
+                    "branding",
+                    JSONObject().apply {
+                        b.primaryColor?.let { put("primary_color", hex(it)) }
+                        b.accentColor?.let { put("accent_color", hex(it)) }
+                        b.backgroundColor?.let { put("background_color", hex(it)) }
+                        b.headerBgColor?.let { put("header_bg_color", hex(it)) }
+                        b.headerTextColor?.let { put("header_text_color", hex(it)) }
+                        b.logoUrl?.let { put("header_logo_url", it) }
+                        b.footerText?.let { put("footer_text", it) }
+                        b.preferentialLabel?.let { put("preferential_label", it) }
+                    },
+                )
+            }
+        }
         .put(
             "remote_keymap",
             JSONObject().apply {
@@ -133,6 +154,7 @@ data class QueueDeviceConfig(
                 audioEnabled = obj.optBoolean("audio_enabled", true),
                 keymap = QueueKeymap.fromJson(obj.optJSONObject("remote_keymap")),
                 serviceDate = obj.optString("service_date").takeIf { it != "null" }.orEmpty(),
+                branding = QueueBranding.fromJson(obj.optJSONObject("branding")),
             )
         }
 
@@ -147,6 +169,9 @@ data class QueueDeviceConfig(
         const val DEFAULT_OVERLAY_MS = 5_000L
         private const val MIN_OVERLAY_MS = 2_000L
         private const val MAX_OVERLAY_MS = 120_000L
+
+        /** `#RRGGBB`, o formato que a constraint `queue_branding_colors` exige. */
+        private fun hex(color: Int): String = String.format("#%06X", 0xFFFFFF and color)
     }
 }
 

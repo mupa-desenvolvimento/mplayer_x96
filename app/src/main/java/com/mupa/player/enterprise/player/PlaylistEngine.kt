@@ -21,6 +21,7 @@ internal class PlaylistEngine(
     private val layerB: PlayerEngine.LayerViews,
     private val videoEngine: VideoEngine,
     private val imageEngine: ImageEngine,
+    private val webSlideEngine: WebSlideEngine,
     private val transitionEngine: TransitionEngine,
     private val telemetrySink: PlayerTelemetrySink?,
 ) {
@@ -40,6 +41,13 @@ internal class PlaylistEngine(
     private var lastFpsBTime: Long = 0L
 
     fun getCurrentItemId(): String? = currentItemIdRef.get()
+
+    private companion object {
+        const val WEB_TYPE = "web"
+
+        /** Tempo dado à página para montar o conteúdo em JS antes de entrar no crossfade. */
+        const val WEB_SETTLE_MS = 600L
+    }
 
     fun pause() {
         if (releasedRef.get()) return
@@ -158,22 +166,40 @@ internal class PlaylistEngine(
         when (item.type.lowercase()) {
             "video" -> {
                 layer.imageView.visibility = View.GONE
+                layer.webView.visibility = View.GONE
                 layer.playerView.visibility = View.VISIBLE
                 videoEngine.stopAndClear(slot)
                 videoEngine.clearError(slot)
                 videoEngine.prepare(slot, item)
             }
+            WEB_TYPE -> {
+                layer.playerView.visibility = View.GONE
+                layer.imageView.visibility = View.GONE
+                layer.webView.visibility = View.VISIBLE
+                videoEngine.stopAndClear(slot)
+                webSlideEngine.resume(layer.webView)
+                item.url?.let { webSlideEngine.load(layer.webView, it) }
+                // Respiro antes do crossfade: a página monta o conteúdo em JS, e entrar com ela
+                // ainda em branco produziria o mesmo flash que o fundo escuro tenta evitar.
+                delay(WEB_SETTLE_MS)
+            }
             else -> {
                 layer.playerView.visibility = View.GONE
+                layer.webView.visibility = View.GONE
                 layer.imageView.visibility = View.VISIBLE
                 videoEngine.stopAndClear(slot)
                 imageEngine.clear(layer.imageView)
-                imageEngine.loadInto(layer.imageView, item.file).join()
+                // `file` só é nulo em item web, que não chega aqui.
+                item.file?.let { imageEngine.loadInto(layer.imageView, it).join() }
             }
         }
     }
 
     private fun startPrepared(slot: VideoEngine.Slot, item: PlayerEngine.PlaybackItem) {
+        android.util.Log.i(
+            "MPlayerItem",
+            "item_no_ar type=${item.type} id=${item.id} duracao=${item.durationMs}ms",
+        )
         currentItemIdRef.set(item.id)
         currentItemTypeRef.set(item.type)
         activeVideoSlotRef.set(if (item.type.equals("video", ignoreCase = true)) slot else null)
@@ -375,12 +401,15 @@ internal class PlaylistEngine(
         layer.container.visibility = View.INVISIBLE
         layer.playerView.visibility = View.INVISIBLE
         layer.imageView.visibility = View.INVISIBLE
+        layer.webView.visibility = View.INVISIBLE
         videoEngine.stopAndClear(slot)
         imageEngine.clear(layer.imageView)
+        webSlideEngine.clear(layer.webView)
     }
 
     private fun showFallback(layer: PlayerEngine.LayerViews) {
         layer.playerView.visibility = View.GONE
+        layer.webView.visibility = View.GONE
         layer.imageView.visibility = View.VISIBLE
         imageEngine.showFallback(layer.imageView)
     }

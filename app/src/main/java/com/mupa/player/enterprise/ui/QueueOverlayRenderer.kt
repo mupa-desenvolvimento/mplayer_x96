@@ -2,12 +2,14 @@ package com.mupa.player.enterprise.ui
 
 import android.os.SystemClock
 import android.view.View
+import androidx.core.content.ContextCompat
 import coil.ImageLoader
 import coil.load
 import com.mupa.player.enterprise.BuildConfig
 import com.mupa.player.enterprise.R
 import com.mupa.player.enterprise.network.TlsCompat
 import com.mupa.player.enterprise.databinding.ViewQueueFullscreenBinding
+import com.mupa.player.enterprise.queue.QueueBranding
 import com.mupa.player.enterprise.queue.QueueState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -43,6 +45,7 @@ class QueueOverlayRenderer(
     private var lastState: QueueState? = null
     private var stale: Boolean = false
     private var brandImageRequested = false
+    private var branding: QueueBranding = QueueBranding.NONE
 
     private val brandImageLoader: ImageLoader by lazy {
         ImageLoader.Builder(binding.root.context)
@@ -73,6 +76,77 @@ class QueueOverlayRenderer(
         binding.queueStep2.stepText.text = res.getString(R.string.queue_screen_step_2)
         binding.queueStep3.stepText.text = res.getString(R.string.queue_screen_step_3)
     }
+
+    /**
+     * Aplica a identidade visual da loja (`queue_branding`, especificação §26).
+     *
+     * Cada cor ausente **mantém o tema padrão** em vez de virar transparente: configuração parcial
+     * é o caso normal, e uma loja que preencheu só a cor primária não pode acabar com texto
+     * invisível. Por isso nada aqui usa valor "vazio" como se fosse cor.
+     *
+     * Os painéis são tingidos via `mutate()` + `setTint` porque o fundo vem de um drawable
+     * compartilhado — sem `mutate()`, tingir um painel mudaria todos os que usam o mesmo recurso,
+     * inclusive em outras telas.
+     */
+    fun applyBranding(newBranding: QueueBranding) {
+        if (newBranding == branding) return
+        branding = newBranding
+        if (newBranding.isEmpty) return
+
+        val ctx = binding.root.context
+        val primary = newBranding.primaryColor ?: ContextCompat.getColor(ctx, R.color.queue_blue)
+        val accent = newBranding.accentColor
+
+        newBranding.backgroundColor?.let { binding.queueScreen.setBackgroundColor(it) }
+
+        // Número, título e setor seguem a cor primária: são o que precisa ser lido de longe.
+        binding.queueScreenNumber.setTextColor(primary)
+        binding.queueScreenTitle.setTextColor(accent ?: primary)
+        binding.queueScreenCounter.setTextColor(primary)
+        binding.queueBrandCaption.setTextColor(primary)
+
+        tintPanel(binding.queuePanelHistory, primary)
+        tintPanel(binding.queuePanelHow, primary)
+
+        // Os elementos secundários também: tema pela metade — número vermelho com selo azul —
+        // parece defeito de renderização, não identidade da loja.
+        binding.queueQrText.setTextColor(primary)
+        // Dentro do painel já tingido, os detalhes claros vêm do branco com alfa — assim funcionam
+        // sobre qualquer cor primária que a loja escolher, clara ou escura.
+        binding.queueHistoryDivider.setBackgroundColor(withAlpha(android.graphics.Color.WHITE, DIVIDER_ALPHA))
+        binding.queueScreenWaiting.setTextColor(withAlpha(android.graphics.Color.WHITE, MUTED_ALPHA))
+        binding.queueScreenDivider.setBackgroundColor(withAlpha(accent ?: primary, DIVIDER_ALPHA))
+
+        listOf(binding.queueFeature1, binding.queueFeature2, binding.queueFeature3).forEach { item ->
+            item.featureText.setTextColor(primary)
+            item.featureIcon.background?.mutate()?.setTint(withAlpha(primary, ICON_BG_ALPHA))
+        }
+        listOf(binding.queueStep1, binding.queueStep2, binding.queueStep3).forEach { item ->
+            // O badge fica sobre o painel já tingido de primária: usar a acentuada o mantém legível.
+            item.stepNumber.background?.mutate()?.setTint(accent ?: withAlpha(primary, BADGE_ALPHA))
+        }
+
+        newBranding.footerText?.let { binding.queueBrandCaption.text = it }
+
+        // O logo da loja tem precedência sobre a imagem fixa da build — era exatamente a dívida
+        // registrada em ENTREGA_06_X96.md §5 ("imagem do produto fixa em BuildConfig").
+        newBranding.logoUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            brandImageRequested = true
+            binding.queueBrandImage.load(url, brandImageLoader) {
+                placeholder(R.drawable.ic_mupa_logo)
+                error(R.drawable.ic_mupa_logo)
+                crossfade(true)
+            }
+        }
+    }
+
+    private fun tintPanel(view: View, color: Int) {
+        view.background?.mutate()?.setTint(color)
+    }
+
+    /** Mesma cor com opacidade menor — evita exigir da loja uma paleta com cinco tons. */
+    private fun withAlpha(color: Int, alpha: Int): Int =
+        (color and 0x00FFFFFF) or (alpha shl 24)
 
     /**
      * Habilita a camada.
@@ -290,5 +364,10 @@ class QueueOverlayRenderer(
         private const val EXIT_DURATION_MS = 300L
         private const val PULSE_DURATION_MS = 160L
         private const val TOAST_DURATION_MS = 3_000L
+
+        private const val DIVIDER_ALPHA = 0x66
+        private const val ICON_BG_ALPHA = 0x22
+        private const val BADGE_ALPHA = 0xCC
+        private const val MUTED_ALPHA = 0x99
     }
 }

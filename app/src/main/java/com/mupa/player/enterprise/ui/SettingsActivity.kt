@@ -74,7 +74,12 @@ class SettingsActivity : ComponentActivity() {
             if (code == null) "não capturada"
             else "${android.view.KeyEvent.keyCodeToString(code)} ($code)"
 
+        val moduleEnabled = runCatching { store.isModuleEnabled() }.getOrDefault(true)
+
         val text = buildString {
+            if (!moduleEnabled) {
+                appendLine("Fila desativada neste aparelho.")
+            }
             if (!paired) {
                 append("Dispositivo não pareado na fila.\n")
             } else {
@@ -89,7 +94,23 @@ class SettingsActivity : ComponentActivity() {
             }
         }
 
-        withContext(Dispatchers.Main) { binding.txtQueueSummary.text = text }
+        withContext(Dispatchers.Main) {
+            binding.txtQueueSummary.text = text
+            // Sem disparar o listener: setChecked reentrante gravaria de novo e somaria revisões.
+            binding.switchQueueEnabled.setOnCheckedChangeListener(null)
+            binding.switchQueueEnabled.isChecked = moduleEnabled
+            binding.switchQueueEnabled.setOnCheckedChangeListener { _, isChecked ->
+                lifecycleScope.launch {
+                    store.setModuleEnabled(isChecked)
+                    Toast.makeText(
+                        this@SettingsActivity,
+                        if (isChecked) "Fila de senhas ativada" else "Fila de senhas desativada",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    loadQueueSummary()
+                }
+            }
+        }
     }
 
     private suspend fun loadDeviceInformation() {

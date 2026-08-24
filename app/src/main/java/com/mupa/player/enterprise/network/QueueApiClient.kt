@@ -89,14 +89,21 @@ class QueueApiClient(
         val creds = runCatching { credentialsProvider() }.getOrNull()
         if (creds == null || !creds.isValid) return@withContext QueueApiResult.Unauthorized
 
-        val builder = Request.Builder()
-            .url(baseUrl.trimEnd('/') + path)
-            .header("x-device-serial", creds.serial)
-            .header("x-device-secret", creds.secret)
-            .header("Accept", "application/json")
-
-        if (method == "POST") {
-            builder.post(EMPTY_JSON.toRequestBody(JSON_MEDIA_TYPE))
+        // Montar a requisição dentro de runCatching não é zelo excessivo: `Request.Builder.header`
+        // lança IllegalArgumentException diante de caractere de controle no valor, e como isto roda
+        // dentro de uma coroutine a exceção subia até a main e derrubava o player em laço
+        // (2026-08-20, credencial colada com quebra de linha no meio). Credencial ruim tem que
+        // virar "não autorizado", não crash.
+        val builder = runCatching {
+            Request.Builder()
+                .url(baseUrl.trimEnd('/') + path)
+                .header("x-device-serial", creds.serial)
+                .header("x-device-secret", creds.secret)
+                .header("Accept", "application/json")
+                .apply { if (method == "POST") post(EMPTY_JSON.toRequestBody(JSON_MEDIA_TYPE)) }
+        }.getOrElse {
+            Log.w(TAG, "queue_api_credencial_invalida: $method $path", it)
+            return@withContext QueueApiResult.Unauthorized
         }
 
         val response = runCatching { client.newCall(builder.build()).execute() }

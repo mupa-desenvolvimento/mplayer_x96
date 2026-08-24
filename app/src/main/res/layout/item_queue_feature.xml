@@ -9,6 +9,7 @@
     android:paddingEnd="4dp">
 
     <View
+        android:id="@+id/featureIcon"
         android:layout_width="28dp"
         android:layout_height="28dp"
         android:background="@drawable/bg_queue_feature_icon" />

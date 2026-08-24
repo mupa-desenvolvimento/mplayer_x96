@@ -28,6 +28,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:scaleType="centerCrop" />
+
+            <!--
+              Slide dinâmico (`type: "web"`). Uma WebView por camada para o item atravessar o
+              mesmo crossfade de imagem e vídeo. Fica GONE quando não está em uso, e o
+              WebSlideEngine descarrega a página ao sair de cena.
+            -->
+            <WebView
+                android:id="@+id/webViewA"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
         </FrameLayout>
 
         <FrameLayout
@@ -49,6 +60,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:scaleType="centerCrop" />
+
+            <!--
+              Slide dinâmico (`type: "web"`). Uma WebView por camada para o item atravessar o
+              mesmo crossfade de imagem e vídeo. Fica GONE quando não está em uso, e o
+              WebSlideEngine descarrega a página ao sair de cena.
+            -->
+            <WebView
+                android:id="@+id/webViewB"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
         </FrameLayout>
     </FrameLayout>
 

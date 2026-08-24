@@ -173,10 +173,24 @@ class QueueSetupActivity : ComponentActivity() {
         }
 
         binding.btnQueuePair.setOnClickListener {
-            val serial = binding.editQueueSerial.text.toString().trim()
-            val secret = binding.editQueueSecret.text.toString().trim()
+            // Espaço em branco é removido de todo o valor, não só das pontas: colar do resultado do
+            // SQL traz quebra de linha no meio com facilidade, e um CR ali dentro tornava a
+            // credencial impossível de usar como header HTTP.
+            val serial = binding.editQueueSerial.text.toString().filterNot { it.isWhitespace() }
+            val secret = binding.editQueueSecret.text.toString().filterNot { it.isWhitespace() }
+
             if (serial.isBlank() || secret.isBlank()) {
                 toast("Informe serial e segredo.")
+                return@setOnClickListener
+            }
+            // O segredo é sempre 64 hexadecimais (32 bytes em hex). Validar aqui transforma um erro
+            // de cópia — colar o bloco inteiro que o SQL devolve, por exemplo — em mensagem na
+            // hora, em vez de um aparelho pareado com lixo que só falha depois, longe daqui.
+            if (!SECRET_FORMAT.matches(secret)) {
+                toast(
+                    "Segredo inválido: são 64 caracteres de 0-9 e a-f. " +
+                        "Cole só o valor, sem a linha do serial.",
+                )
                 return@setOnClickListener
             }
             lifecycleScope.launch {
@@ -352,5 +366,8 @@ class QueueSetupActivity : ComponentActivity() {
 
     companion object {
         private const val CAPTURE_TIMEOUT_MS = 15_000L
+
+        /** `encode(gen_random_bytes(32), 'hex')` no servidor — sempre 64 hexadecimais. */
+        private val SECRET_FORMAT = Regex("^[0-9a-fA-F]{64}$")
     }
 }

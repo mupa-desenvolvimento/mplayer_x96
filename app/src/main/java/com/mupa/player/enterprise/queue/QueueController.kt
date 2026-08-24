@@ -96,6 +96,14 @@ class QueueController(
         // Foi exatamente o que aconteceu no X96 de bancada em 2026-08-17.
         keymap = store.localKeymap()
 
+        // O interruptor vem antes da credencial: desligar a fila não deve exigir despareamento,
+        // senão o operador perde as teclas capturadas para voltar atrás depois.
+        if (!store.isModuleEnabled()) {
+            Log.i(TAG, "queue_disabled: modulo desligado nas Configuracoes")
+            renderer.hide()
+            return
+        }
+
         val creds = store.credentials()
         if (creds == null || !api.isConfigured) {
             Log.i(TAG, "queue_disabled: dispositivo sem credencial de fila")
@@ -311,8 +319,12 @@ class QueueController(
         withAudio: Boolean = true,
         history: List<String> = emptyList(),
         waitingCount: Int = 0,
+        branding: QueueBranding = QueueBranding.NONE,
     ) {
         renderer.show()
+        // Permite conferir a identidade visual de uma loja sem parear o aparelho nem tocar no
+        // banco — é assim que se compara farmácia e açougue lado a lado numa TV de bancada.
+        if (!branding.isEmpty) renderer.applyBranding(branding)
         renderer.setSectorName(sectorName)
         if (history.isNotEmpty()) {
             renderer.renderState(QueueState.forPreview(number, history, waitingCount))
@@ -392,6 +404,9 @@ class QueueController(
         )
 
         renderer.setSectorName(newConfig.sectorName)
+        // Identidade visual antes de qualquer chamada aparecer: aplicar depois faria a primeira
+        // senha do dia sair com o tema padrão e só a segunda com o da loja.
+        renderer.applyBranding(newConfig.branding)
 
         if (!fromCache && newConfig.role == QueueRole.CALLER && keymap.isEmpty) {
             Log.w(

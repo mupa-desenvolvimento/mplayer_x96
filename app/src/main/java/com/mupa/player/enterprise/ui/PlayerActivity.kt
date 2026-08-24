@@ -151,11 +151,13 @@ class PlayerActivity : ComponentActivity() {
                 container = binding.layerA,
                 playerView = binding.playerViewA,
                 imageView = binding.imageViewA,
+                webView = binding.webViewA,
             ),
             layerB = PlayerEngine.LayerViews(
                 container = binding.layerB,
                 playerView = binding.playerViewB,
                 imageView = binding.imageViewB,
+                webView = binding.webViewB,
             ),
         )
 
@@ -352,6 +354,16 @@ class PlayerActivity : ComponentActivity() {
                             ?.filter { it.isNotBlank() }
                             .orEmpty()
                         val waiting = intent.getIntExtra("waiting", 0)
+                        // Cores opcionais, para prever o tema de uma loja sem pareamento.
+                        fun color(extra: String): Int? = intent.getStringExtra(extra)
+                            ?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() }
+                        val branding = com.mupa.player.enterprise.queue.QueueBranding(
+                            primaryColor = color("primary"),
+                            accentColor = color("accent"),
+                            backgroundColor = color("bg"),
+                            logoUrl = intent.getStringExtra("logo"),
+                            footerText = intent.getStringExtra("caption"),
+                        )
                         Log.i(TAG_SYNC, "queue_test_call number=$number priority=$priority audio=$withAudio")
                         queueController?.showTestCall(
                             number = number,
@@ -361,6 +373,7 @@ class PlayerActivity : ComponentActivity() {
                             withAudio = withAudio,
                             history = history,
                             waitingCount = waiting,
+                            branding = branding,
                         )
                     }
 
@@ -962,17 +975,88 @@ class PlayerActivity : ComponentActivity() {
 
         return items.mapNotNull { item ->
             if (!isItemCurrentlyActive(item)) return@mapNotNull null
+
+            // Item `web` não tem arquivo: o conteúdo é a página viva, renderizada na WebView.
+            // Exigir download aqui foi o que transformou o slide dinâmico em tela preta antes
+            // deste suporte existir (contrato de 2026-08-21 §2).
+            if (item.type.equals(WEB_TYPE, ignoreCase = true)) {
+                val url = item.url.trim()
+                if (url.isBlank()) {
+                    Log.w(TAG_SYNC, "item_web_sem_url id=${item.id}")
+                    return@mapNotNull null
+                }
+                return@mapNotNull PlayerEngine.PlaybackItem(
+                    id = item.id,
+                    type = item.type,
+                    file = null,
+                    url = url,
+                    durationMs = item.durationMs,
+                    volume = item.volume,
+                    offsetStartMs = item.offsetStartMs,
+                    offsetEndMs = item.offsetEndMs,
+                )
+            }
+
             val file = mediaIndex[item.id] ?: return@mapNotNull null
+            if (!isRenderable(item.type, file)) return@mapNotNull null
             PlayerEngine.PlaybackItem(
                 id = item.id,
                 type = item.type,
                 file = file,
+                url = null,
                 durationMs = item.durationMs,
                 volume = item.volume,
                 offsetStartMs = item.offsetStartMs,
                 offsetEndMs = item.offsetEndMs,
             )
         }
+    }
+
+    /**
+     * Um item só entra na playlist se o player realmente souber desenhá-lo.
+     *
+     * `PlaylistEngine.prepareInto` trata **tudo que não é vídeo como imagem**, e `waitForSwitch`
+     * segura a tela pelo `duration_ms` do item. Combinados, um arquivo que o decodificador recusa
+     * vira tela preta pelo tempo inteiro do item, sem erro visível.
+     *
+     * Aconteceu em campo em 2026-08-21: o manifesto passou a trazer `type: "web"` apontando para
+     * uma página; o player baixou o HTML como se fosse mídia e a TV ficou 50 segundos no escuro a
+     * cada volta da rotação.
+     *
+     * A verificação é por **assinatura do arquivo**, não pelo campo `type`. Checar o texto do tipo
+     * seria correr atrás de cada valor novo que a plataforma inventar; olhar os primeiros bytes
+     * cobre também download corrompido e arquivo trocado, que dão o mesmo sintoma.
+     */
+    private fun isRenderable(type: String, file: File): Boolean {
+        if (type.equals("video", ignoreCase = true)) return true
+
+        val header = runCatching {
+            file.inputStream().use { input ->
+                ByteArray(12).also { buf ->
+                    if (input.read(buf) < buf.size) return false
+                }
+            }
+        }.getOrNull() ?: return false
+
+        fun match(vararg bytes: Int, at: Int = 0): Boolean =
+            bytes.withIndex().all { (i, b) -> header[at + i].toInt() and 0xFF == b }
+
+        val isImage =
+            match(0xFF, 0xD8, 0xFF) ||                                   // JPEG
+                match(0x89, 0x50, 0x4E, 0x47) ||                         // PNG
+                match(0x47, 0x49, 0x46, 0x38) ||                         // GIF
+                match(0x42, 0x4D) ||                                     // BMP
+                (match(0x52, 0x49, 0x46, 0x46) &&                        // RIFF....WEBP
+                    match(0x57, 0x45, 0x42, 0x50, at = 8))
+
+        if (!isImage) {
+            Log.w(
+                TAG_SYNC,
+                "item_ignorado type=$type file=${file.name} — nao e imagem nem video; " +
+                    "seria tela preta pela duracao do item",
+            )
+        }
+        return isImage
     }
 
     private fun dpToPx(dp: Int): Int {
@@ -1300,6 +1384,9 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_DEVICE_ID = "extra_device_id"
 
         private const val TAG_SYNC = "MPlayerSync"
+
+        /** Slide dinâmico servido como página viva — contrato de 2026-08-21. */
+        private const val WEB_TYPE = "web"
 
         /** Gatilhos de verificação do overlay em hardware. Ver [queueTestReceiver]. */
         const val ACTION_QUEUE_TEST_CALL = "com.mupa.player.enterprise.ACTION_QUEUE_TEST_CALL"

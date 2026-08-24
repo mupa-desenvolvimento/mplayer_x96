@@ -47,6 +47,8 @@ data class MediaSyncProgress(
     val currentSpeedBytesPerSec: Long,
 )
 
+private const val WEB_TYPE = "web"
+
 class ManifestManager(private val context: Context) {
     private val api = SupabaseClient.createApi()
     private val db = AppDatabase.get(context)
@@ -96,7 +98,11 @@ class ManifestManager(private val context: Context) {
         onProgress: ((MediaSyncProgress) -> Unit)? = null,
         maxConcurrentDownloads: Int = 2,
     ): List<MediaEntity> = withContext(Dispatchers.IO) {
-        val items = parseItems(manifestJson)
+        // Itens `web` nao tem arquivo para baixar: sao pagina viva, renderizada na WebView, e o
+        // contrato de 2026-08-21 e explicito em "nao tente pre-carregar". Filtrar aqui e nao mais
+        // abaixo tambem conserta a contagem de progresso, que senao esperaria por um download que
+        // nunca acontece.
+        val items = parseItems(manifestJson).filterNot { it.type.equals(WEB_TYPE, ignoreCase = true) }
         val mediaDir = getMediaDir()
         mediaDir.mkdirs()
 

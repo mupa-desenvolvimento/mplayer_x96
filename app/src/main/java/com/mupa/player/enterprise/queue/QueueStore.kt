@@ -15,8 +15,22 @@ import org.json.JSONObject
 
 /** Credencial de dispositivo do MUPA Queue (CONTRATO §1). Serial + segredo de 256 bits. */
 data class QueueCredentials(val serial: String, val secret: String) {
-    val isValid: Boolean get() = serial.isNotBlank() && secret.isNotBlank()
+    /**
+     * Não basta estar preenchido: os dois valores viram **header HTTP**, e o OkHttp lança
+     * `IllegalArgumentException` diante de qualquer caractere de controle.
+     *
+     * Isso derrubou o player em campo em 2026-08-20. O operador colou no campo do segredo o bloco
+     * de duas linhas inteiro que o SQL devolve (a linha do serial, quebra, a linha do segredo). O
+     * CR ficou no meio do valor e a exceção subia de dentro da coroutine até a main — crash em
+     * laço, um por relançamento. `trim()` não pegava, porque o CR não estava nas pontas.
+     */
+    val isValid: Boolean
+        get() = serial.isNotBlank() && secret.isNotBlank() &&
+            isHeaderSafe(serial) && isHeaderSafe(secret)
 }
+
+/** ASCII imprimível: o intervalo que um valor de header HTTP aceita sem escape. */
+private fun isHeaderSafe(value: String): Boolean = value.all { it.code in 0x20..0x7E }
 
 /**
  * Persistência local do módulo de fila, sobre o `settingsDataStore` já existente.
@@ -38,6 +52,7 @@ class QueueStore(private val context: Context) {
         val keyNext = intPreferencesKey("queue_key_next")
         val keyBack = intPreferencesKey("queue_key_back")
         val revision = intPreferencesKey("queue_revision")
+        val moduleEnabled = booleanPreferencesKey("queue_module_enabled")
     }
 
     /**
@@ -55,6 +70,26 @@ class QueueStore(private val context: Context) {
         context.settingsDataStore.edit { it[Keys.revision] = (it[Keys.revision] ?: 0) + 1 }
     }
 
+    /**
+     * Chave mestra do módulo de fila, ligada pelo operador nas Configurações.
+     *
+     * **Default `true`**, e isso é deliberado: parear o aparelho já é o ato explícito de dizer que
+     * ele participa da fila. Se o default fosse `false`, todo X96 já pareado pararia de chamar
+     * senha na atualização, e o sintoma — controle mudo — é justamente o mais difícil de
+     * diagnosticar em loja.
+     *
+     * O interruptor existe para o caso oposto: desligar a fila num aparelho pareado sem perder o
+     * pareamento nem as teclas capturadas. Ex.: TV que passa a rodar só campanha numa data
+     * promocional e volta a chamar senha depois.
+     */
+    suspend fun isModuleEnabled(): Boolean =
+        context.settingsDataStore.data.first()[Keys.moduleEnabled] ?: true
+
+    suspend fun setModuleEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.moduleEnabled] = enabled }
+        bumpRevision()
+    }
+
     /** `true` quando o aparelho tem credencial gravada — o módulo inteiro fica inerte sem ela. */
     val enabledFlow: Flow<Boolean> =
         context.settingsDataStore.data
@@ -69,10 +104,17 @@ class QueueStore(private val context: Context) {
         return creds.takeIf { it.isValid }
     }
 
+    /**
+     * Grava serial e segredo, removendo **todo** espaço em branco — não só das pontas.
+     *
+     * Colar de um resultado de SQL traz quebra de linha e espaço no meio do valor com facilidade, e
+     * um único CR ali dentro tornava a credencial impossível de usar como header. Sanear na
+     * gravação impede que o valor sujo chegue a ser persistido.
+     */
     suspend fun saveCredentials(serial: String, secret: String) {
         context.settingsDataStore.edit {
-            it[Keys.serialOverride] = serial.trim()
-            it[Keys.secret] = CryptoUtils.encrypt(secret.trim())
+            it[Keys.serialOverride] = serial.filterNot { c -> c.isWhitespace() }
+            it[Keys.secret] = CryptoUtils.encrypt(secret.filterNot { c -> c.isWhitespace() })
             it[Keys.enabled] = true
         }
         bumpRevision()
