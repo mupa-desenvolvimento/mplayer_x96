@@ -153,11 +153,38 @@ class ManifestManager(private val context: Context) {
                         val existingFile = mediaDir.listFiles()?.firstOrNull {
                             it.name.substringBeforeLast('.', missingDelimiterValue = "") == item.id && it.length() > 0L
                         }
+
+                        // A URL do manifesto e comparada com a da ultima vez que este item foi
+                        // baixado. Sem isso o player nunca rebaixa nada: bastava existir arquivo com
+                        // o id do item para o download ser pulado, e a URL nem era olhada.
+                        //
+                        // E pre-requisito do conteudo dinamico renderizado no servidor, em que o
+                        // mesmo item e republicado a cada hora — o card de clima congelaria na
+                        // primeira imagem pelo resto da vida do aparelho. Mas conserta tambem a
+                        // midia comum: trocar o arquivo de uma campanha mantendo id e posicao nunca
+                        // chegava a TV.
+                        val armazenado = runCatching { db.mediaDao().getById(item.id) }.getOrNull()
+                        val urlMudou = armazenado != null && armazenado.remoteUrl != item.url
+
                         val ext = resolveExtension(item)
                         val fileName = item.id + ext
-                        val target = existingFile ?: File(mediaDir, fileName)
 
-                        if (existingFile == null) {
+                        // Apaga o arquivo antigo antes de rebaixar: a extensao pode mudar junto com
+                        // a URL, e sobrariam dois arquivos com o mesmo id no diretorio. A montagem
+                        // da playlist pega o primeiro que encontrar, sem criterio de desempate.
+                        if (urlMudou && existingFile != null) {
+                            android.util.Log.i(
+                                "ManifestManager",
+                                "midia_mudou id=${item.id} — rebaixando (${existingFile.name})",
+                            )
+                            runCatching { existingFile.delete() }
+                        }
+
+                        val target =
+                            if (urlMudou) File(mediaDir, fileName)
+                            else existingFile ?: File(mediaDir, fileName)
+
+                        if (existingFile == null || urlMudou) {
                             currentBytes.set(0L)
                             currentTotalBytes.set(-1L)
                             lastSpeedAt.set(System.currentTimeMillis())
