@@ -59,6 +59,21 @@ android {
             "SUPABASE_COMPANIES_URL",
             "\"https://iurqddkuihjsmxubibao.supabase.co/rest/v1/companies\"",
         )
+        buildConfigField(
+            "String",
+            "SUPABASE_DEVICE_COMMANDS_URL",
+            "\"https://iurqddkuihjsmxubibao.supabase.co/rest/v1/device_commands\"",
+        )
+        buildConfigField(
+            "String",
+            "SUPABASE_DEVICE_EXECUTION_LOGS_URL",
+            "\"https://iurqddkuihjsmxubibao.supabase.co/rest/v1/device_execution_logs\"",
+        )
+        buildConfigField(
+            "String",
+            "SUPABASE_REALTIME_URL",
+            "\"wss://iurqddkuihjsmxubibao.supabase.co/realtime/v1/websocket\"",
+        )
     }
 
     signingConfigs {

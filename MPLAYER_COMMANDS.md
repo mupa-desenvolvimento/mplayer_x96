@@ -482,9 +482,77 @@ In the second case, `DeviceCacheManager` persists `tipoDaLicenca = null` and the
 
 ---
 
+## 6) Sincronização de conteúdo (Mupa Connect → `device_commands`)
+
+Canal usado pelo painel **mupa-connect** para forçar atualização de playlist. Implementado em
+`services/DeviceCommandService.kt` e consumido por `PlayerActivity.commandPollLoop()`.
+
+### 6.1 Comando suportado
+
+| Command | Origem | Efeito no MPlayer |
+|---|---|---|
+| `reload_playlist` | INSERT em `public.device_commands` pela RPC `get_playlist_affected_devices` | Busca o manifesto, baixa as mídias novas e troca a playlist na próxima transição (hot-swap, sem tela preta). |
+
+O MPlayer filtra `command=eq.reload_playlist` no servidor — comandos de outros tipos não são lidos
+nem marcados, para não interferir com outros players que consomem a mesma tabela.
+
+### 6.2 Transporte
+
+Polling REST (Opção B do manual de integração), a cada **15 s**, primeira consulta 5 s após o start:
+
+```http
+GET /rest/v1/device_commands?select=id,device_id,command,payload
+    &device_id=in.("<serial>","<device_id>","<apelido>")
+    &status=eq.pending&command=eq.reload_playlist&order=created_at.asc&limit=20
+```
+
+`device_commands.device_id` é TEXT livre (serial, apelido interno ou id), então a consulta usa
+**todos** os identificadores conhecidos do dispositivo: serial local, `device_id` do cache,
+`device_name` e `device_db_id`.
+
+> Supabase Realtime (Opção A) **não** está implementado — ver §6.5.
+
+### 6.3 Ciclo de vida
+
+```
+pending ──ack──> ack ──aplica manifesto──> done | error ──> device_execution_logs
+```
+
+1. `PATCH ?id=eq.{id}` → `{ status: "ack", acknowledged_at }` imediatamente ao receber.
+2. `refreshInBackground()` — fetch do manifesto, download das mídias, `setPlaylist()`.
+3. `PATCH ?id=eq.{id}` → `{ status: "done" | "error", executed_at }`.
+4. `INSERT device_execution_logs` com `result`, `duration_ms` e `payload`.
+
+`error_message` não consta na definição da tabela no manual de integração. É enviado apenas no
+caminho de erro e, se o PostgREST recusar a coluna, o PATCH é repetido sem o campo para que o
+status final chegue ao painel de qualquer forma.
+
+### 6.4 Cadência de fallback (sem comando)
+
+Independente do canal de comandos, `PlayerActivity` mantém:
+
+| Loop | Intervalo |
+|---|---|
+| Verificação remota do manifesto | 1ª em 2 min; depois 5–15 min sorteado (jitter de frota) |
+| Reavaliação de vigência dos itens locais | 60 s |
+
+### 6.5 Pendências conhecidas
+
+- **Realtime não implementado.** `minSdk 21` no flavor `legacy` inviabiliza `supabase-kt`; exigiria
+  Phoenix sobre `OkHttp WebSocket` escrito à mão. O polling de 15 s cobre o caso de uso.
+- **RLS.** O device atualiza `device_commands` com a anon key. Sem policy por serial, qualquer
+  cliente com a chave pode ler e encerrar comandos de outros dispositivos.
+- **Mídia trocada com o mesmo id não é rebaixada** (`ManifestManager.syncMedia` pula arquivo já
+  existente, sem checar hash/tamanho).
+- **Detecção de mudança por string bruta** do manifesto (`compareManifest`) — depende do endpoint
+  devolver bytes estáveis quando nada mudou.
+
+---
+
 ## Changelog
 
 | Version | Date | Description |
 |---|---|---|
 | 1.0.0 | 2024-03-10 | Initial document — Argos commands (sections 1–4) |
 | 1.1.0 | 2026-06-11 | Added Section 5: Audience Analytics & Facial Recognition |
+| 1.2.0 | 2026-08-12 | Added Section 6: sincronização de conteúdo via `device_commands` (`reload_playlist`) |
