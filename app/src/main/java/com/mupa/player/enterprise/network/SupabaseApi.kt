@@ -44,4 +44,12 @@ interface SupabaseApi {
         @Url url: String,
         @Body body: Map<String, @JvmSuppressWildcards Any?>,
     ): ResponseBody
+
+    /** UPSERT em PostgREST — a URL deve incluir `?on_conflict=<coluna_unica>`. */
+    @Headers("Content-Type: application/json", "Accept: application/json", "Prefer: return=minimal,resolution=merge-duplicates")
+    @POST
+    suspend fun upsertJson(
+        @Url url: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any?>,
+    ): ResponseBody
 }

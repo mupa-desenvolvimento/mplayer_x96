@@ -1,6 +1,7 @@
 package com.mupa.player.enterprise.managers
 
 import android.content.Context
+import android.os.Environment
 import com.mupa.player.enterprise.BuildConfig
 import com.mupa.player.enterprise.network.SupabaseClient
 import com.mupa.player.enterprise.network.TlsCompat
@@ -237,8 +238,13 @@ class ManifestManager(private val context: Context) {
         }
     }
 
-    private fun getMediaDir(): File {
-        return File(context.getExternalFilesDir(null), "media")
+    /**
+     * Pasta pública de download real das mídias — não é cache: o ExoPlayer sempre reproduz
+     * o arquivo daqui, nunca a URL remota. Fica fora do diretório privado do app para que o
+     * usuário possa navegar até os arquivos com um gerenciador de arquivos comum.
+     */
+    fun getMediaDir(): File {
+        return File(Environment.getExternalStorageDirectory(), "mplayer_downloads")
     }
 
     private fun JSONObject.optNullableString(key: String): String? {

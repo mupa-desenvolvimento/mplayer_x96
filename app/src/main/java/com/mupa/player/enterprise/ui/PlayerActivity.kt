@@ -6,10 +6,13 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Process
 import android.os.SystemClock
+import android.provider.Settings
 import android.graphics.Color
 import android.Manifest
 import android.content.pm.PackageManager
@@ -39,8 +42,13 @@ import com.mupa.player.enterprise.managers.MediaSyncProgress
 import com.mupa.player.enterprise.managers.SettingsManager
 import com.mupa.player.enterprise.player.PlaybackProfile
 import com.mupa.player.enterprise.player.PlayerEngine
+import com.mupa.player.enterprise.player.PlayerTelemetry
+import com.mupa.player.enterprise.player.PlayerTelemetrySink
 import com.mupa.player.enterprise.player.TransitionConfig
 import com.mupa.player.enterprise.R
+import com.mupa.player.enterprise.services.CrashRecoveryManager
+import com.mupa.player.enterprise.services.HeartbeatPayload
+import com.mupa.player.enterprise.services.HeartbeatService
 import java.util.Locale
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -103,12 +111,34 @@ class PlayerActivity : ComponentActivity() {
     /** Conexão única do Realtime — ver comentário na criação, em [startLoop]. */
     private var realtimeJob: Job? = null
 
+    /** Último snapshot de telemetria de playback — alimenta o heartbeat. Ver [heartbeatLoop]. */
+    @Volatile
+    private var lastTelemetry: PlayerTelemetry? = null
+
+    @Volatile
+    private var lastSyncOk: Boolean? = null
+
+    @Volatile
+    private var lastSyncAtEpochMs: Long? = null
+
+    /** Capturado uma vez no start: crash da execução anterior, se houve. Ver [CrashRecoveryManager]. */
+    private var lastCrash: Pair<Long, String>? = null
+
     private var storagePermissionDeferred: CompletableDeferred<Boolean>? = null
     private val storagePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
             val granted = results.values.all { it }
             storagePermissionDeferred?.complete(granted)
             storagePermissionDeferred = null
+        }
+
+    /** Android 11+ exige "Acesso a todos os arquivos" (concedido em Configurações, não é um dialog comum) para gravar em [ManifestManager.getMediaDir]. */
+    private var allFilesAccessDeferred: CompletableDeferred<Boolean>? = null
+    private val allFilesAccessLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            val granted = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
+            allFilesAccessDeferred?.complete(granted)
+            allFilesAccessDeferred = null
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,6 +165,7 @@ class PlayerActivity : ComponentActivity() {
                 playerView = binding.playerViewB,
                 imageView = binding.imageViewB,
             ),
+            telemetrySink = PlayerTelemetrySink { t -> lastTelemetry = t },
         )
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -243,12 +274,20 @@ class PlayerActivity : ComponentActivity() {
 
         ensureStoragePermissionIfNeeded()
 
+        // Capturado só na primeira vez: consumeLastCrash() limpa o registro ao ler, então uma
+        // segunda chamada (ex.: reentrada por STOP/START ao voltar de Configurações) devolveria
+        // null e apagaria o valor real já guardado neste processo.
+        if (lastCrash == null) {
+            lastCrash = runCatching { CrashRecoveryManager.consumeLastCrash(applicationContext) }.getOrNull()
+        }
+
         // Os loops periódicos são criados ANTES da sincronização inicial: a atualização
         // automática não pode depender do sucesso da carga inicial. Rodam no escopo do
         // repeatOnLifecycle, então são cancelados no STOP e recriados no START — sem acúmulo.
         scope.launch { activeItemsLoop() }
         scope.launch { remoteRefreshLoop() }
         scope.launch { commandPollLoop() }
+        scope.launch { heartbeatLoop() }
 
         // O socket do Realtime é a exceção: vive no lifecycleScope (morre só no onDestroy) e não
         // no escopo do repeatOnLifecycle, com guarda de instância única.
@@ -264,8 +303,17 @@ class PlayerActivity : ComponentActivity() {
             realtimeJob = lifecycleScope.launch { realtimeCommandLoop() }
         }
 
-        tryStartOfflinePlayback()
-        initialSyncAndPlayback()
+        // Regra de sinalização pública: existe conteúdo local -> toca JÁ, sem nenhuma tela de
+        // sincronização por cima, internet ou não. A verificação de programação nova fica
+        // inteiramente em segundo plano (refreshInBackground() — o mesmo caminho do ciclo
+        // periódico — só mostra algo na tela quando há troca de verdade, nunca por uma simples
+        // comparação de manifesto). initialSyncAndPlayback() com overlay bloqueante só roda
+        // quando não há NADA local pra mostrar ainda (primeiro boot / dados apagados).
+        if (tryStartOfflinePlayback()) {
+            scope.launch { runCatching { refreshInBackground() } }
+        } else {
+            initialSyncAndPlayback()
+        }
     }
 
     /** Reavalia a vigência (data / faixa horária) dos itens já baixados localmente. */
@@ -393,6 +441,9 @@ class PlayerActivity : ComponentActivity() {
                     false
                 }
 
+            lastSyncOk = success
+            lastSyncAtEpochMs = System.currentTimeMillis()
+
             if (success) {
                 backoffMs = REFRESH_RETRY_BASE_MS
                 delay(Random.nextLong(REFRESH_INTERVAL_MIN_MS, REFRESH_INTERVAL_MAX_MS))
@@ -403,29 +454,72 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun hasStoragePermission(): Boolean {
-        if (Build.VERSION.SDK_INT < 23) return true
-        return if (Build.VERSION.SDK_INT >= 33) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    /**
+     * Reporta a saúde do device pro Supabase — não é opcional pra "alta disponibilidade": é o
+     * único jeito de alguém saber, de fora, que o painel parou de tocar. Uma linha por device
+     * (upsert), sobrescrita a cada ciclo; ver [HeartbeatService].
+     */
+    private suspend fun heartbeatLoop() {
+        delay(HEARTBEAT_FIRST_DELAY_MS)
+        val service = HeartbeatService()
+        while (true) {
+            runCatching { sendHeartbeatOnce(service) }
+                .onFailure { Log.w(TAG_SYNC, "heartbeat_failed", it) }
+            delay(HEARTBEAT_INTERVAL_MS)
         }
     }
 
+    private suspend fun sendHeartbeatOnce(service: HeartbeatService) {
+        val telemetry = lastTelemetry
+        val freeMb = runCatching {
+            manifestManager.getMediaDir().takeIf { it.exists() }?.usableSpace?.let { it / (1024L * 1024L) }
+        }.getOrNull()
+        val status = if (telemetry?.lastError.isNullOrBlank()) "ok" else "error"
+
+        service.send(
+            HeartbeatPayload(
+                deviceId = deviceId,
+                appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                status = status,
+                currentItemId = telemetry?.itemId,
+                currentItemType = telemetry?.itemType,
+                isPlaying = telemetry?.isPlaying,
+                lastPlaybackError = telemetry?.lastError,
+                lastCrashAtEpochMs = lastCrash?.first,
+                lastCrashMessage = lastCrash?.second,
+                lastSyncOk = lastSyncOk,
+                lastSyncAtEpochMs = lastSyncAtEpochMs,
+                storageFreeMb = freeMb,
+                cpuPercent = telemetry?.cpuPercent,
+                usedRamMb = telemetry?.usedRamMb,
+                totalRamMb = telemetry?.totalRamMb,
+                temperatureC = telemetry?.temperatureC,
+            ),
+        )
+    }
+
+    /**
+     * A partir do Android 11 (API 30), gravar fora do diretório privado do app — como em
+     * [ManifestManager.getMediaDir], que agora aponta para /storage/emulated/0/mplayer_downloads —
+     * exige "Acesso a todos os arquivos" (MANAGE_EXTERNAL_STORAGE), concedido em Configurações.
+     * Abaixo disso, WRITE_EXTERNAL_STORAGE (com requestLegacyExternalStorage no manifesto) basta.
+     */
+    private fun hasStoragePermission(): Boolean {
+        if (Build.VERSION.SDK_INT >= 30) return Environment.isExternalStorageManager()
+        if (Build.VERSION.SDK_INT < 23) return true
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    }
+
     private fun storagePermissionsToRequest(): Array<String> {
-        return if (Build.VERSION.SDK_INT >= 33) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_MEDIA_IMAGES,
-            )
-        } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
+        return arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     }
 
     private suspend fun ensureStoragePermissionIfNeeded(): Boolean {
         if (hasStoragePermission()) return true
+
+        if (Build.VERSION.SDK_INT >= 30) {
+            return requestAllFilesAccess()
+        }
         if (Build.VERSION.SDK_INT < 23) return true
 
         val deferred = CompletableDeferred<Boolean>()
@@ -434,6 +528,24 @@ class PlayerActivity : ComponentActivity() {
         val granted = withTimeoutOrNull(12_000L) { deferred.await() } ?: false
         if (storagePermissionDeferred === deferred) {
             storagePermissionDeferred = null
+        }
+        return granted
+    }
+
+    private suspend fun requestAllFilesAccess(): Boolean {
+        val deferred = CompletableDeferred<Boolean>()
+        allFilesAccessDeferred = deferred
+        val launched = runCatching {
+            allFilesAccessLauncher.launch(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")),
+            )
+        }.isSuccess
+        if (!launched) {
+            runCatching { allFilesAccessLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+        }
+        val granted = withTimeoutOrNull(60_000L) { deferred.await() } ?: Environment.isExternalStorageManager()
+        if (allFilesAccessDeferred === deferred) {
+            allFilesAccessDeferred = null
         }
         return granted
     }
@@ -485,6 +597,16 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private suspend fun initialSyncAndPlayback() {
+        // Só chega aqui quando tryStartOfflinePlayback() falhou no chamador (startLoop) — ou
+        // seja, não há NADA local pra tocar ainda (primeiro boot / dados apagados). Com
+        // conteúdo local já em disco, o chamador nunca entra aqui: dispara refreshInBackground()
+        // direto, sem overlay algum. Esse checar getCurrentItemId() cobre só o caso defensivo
+        // de reentrância (função chamada de novo com o player já rodando por outro caminho).
+        if (!isOnline() && playerEngine.getCurrentItemId() != null) {
+            setSyncOverlayVisible(false)
+            return
+        }
+
         setSyncOverlayVisible(true)
         updateSyncTexts(
             status = "Sincronizando conteúdos...",
@@ -495,17 +617,6 @@ class PlayerActivity : ComponentActivity() {
         )
 
         if (!isOnline()) {
-            if (playerEngine.getCurrentItemId() != null) {
-                updateSyncTexts(
-                    status = "Sem internet. Reproduzindo conteúdo local.",
-                    countText = "",
-                    fileText = "",
-                    detailText = "",
-                    progressPercent = null,
-                )
-                setSyncOverlayVisible(false)
-                return
-            }
             while (!isOnline()) {
                 updateSyncTexts(
                     status = "Sem internet. Aguardando conexão para sincronizar...",
@@ -835,7 +946,7 @@ class PlayerActivity : ComponentActivity() {
             }.getOrDefault(emptyMap())
         }
 
-        val mediaDir = File(applicationContext.getExternalFilesDir(null), "media")
+        val mediaDir = manifestManager.getMediaDir()
         val mediaIndexFromDisk =
             runCatching {
                 mediaDir.listFiles().orEmpty()
@@ -979,6 +1090,7 @@ class PlayerActivity : ComponentActivity() {
         filesDir.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
         cacheDir.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
         getExternalFilesDir(null)?.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
+        runCatching { manifestManager.getMediaDir() }.getOrNull()?.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
     }
 
     private fun deleteRecursivelySafely(file: File) {
@@ -1215,6 +1327,10 @@ class PlayerActivity : ComponentActivity() {
         /** Reavaliação da vigência (data / faixa horária) dos itens já baixados. */
         private const val ACTIVE_ITEMS_CHECK_MS = 60 * 1000L
 
+        /** Heartbeat de saúde do device (ver [heartbeatLoop]) — primeiro ciclo e intervalo fixo. */
+        private const val HEARTBEAT_FIRST_DELAY_MS = 20 * 1000L
+        private const val HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000L
+
         /**
          * Rede de segurança do canal de push: a primeira varredura é imediata (no start) e
          * este é o intervalo entre as seguintes. A entrega rápida vem do Realtime.
@@ -1243,5 +1359,25 @@ class DevModeReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_SET_DEV_MODE = "com.mupa.player.enterprise.ACTION_SET_DEV_MODE"
         const val EXTRA_ENABLED = "enabled"
+    }
+}
+
+/**
+ * Painel de rua pode ficar dias sem ninguém no local — se o TV box reiniciar sozinho (queda de
+ * energia, atualização do sistema), o app precisa voltar a tocar sem intervenção manual.
+ */
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != ACTION_QUICKBOOT_POWERON) return
+        runCatching {
+            context.startActivity(
+                Intent(context, SplashActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    companion object {
+        private const val ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON"
     }
 }

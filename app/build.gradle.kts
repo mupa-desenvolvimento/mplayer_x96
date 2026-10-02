@@ -26,7 +26,7 @@ android {
         applicationId = "com.mupa.player.x96"
         minSdk = 21
         targetSdk = 34
-        versionCode = 1
+        versionCode = 9
         versionName = "1.0.0"
 
         // Dedicated to Android-9-and-below TV boxes with no camera/barcode scanner
@@ -68,6 +68,11 @@ android {
             "String",
             "SUPABASE_DEVICE_EXECUTION_LOGS_URL",
             "\"https://iurqddkuihjsmxubibao.supabase.co/rest/v1/device_execution_logs\"",
+        )
+        buildConfigField(
+            "String",
+            "SUPABASE_DEVICE_HEARTBEAT_URL",
+            "\"https://iurqddkuihjsmxubibao.supabase.co/rest/v1/device_heartbeat\"",
         )
         buildConfigField(
             "String",

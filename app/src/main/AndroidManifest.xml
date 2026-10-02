@@ -1,18 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
+        android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Necessária no Android 11+ para gravar em /storage/emulated/0/mplayer_downloads,
+         uma pasta pública fora do diretório privado do app (fora do escopo do storage escopado). -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <permission
         android:name="com.mupa.player.enterprise.permission.SET_DEV_MODE"
@@ -26,6 +33,7 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.MupaPlayerEnterprise"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
         <activity
@@ -66,6 +74,15 @@
             android:permission="com.mupa.player.enterprise.permission.SET_DEV_MODE">
             <intent-filter>
                 <action android:name="com.mupa.player.enterprise.ACTION_SET_DEV_MODE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".ui.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 

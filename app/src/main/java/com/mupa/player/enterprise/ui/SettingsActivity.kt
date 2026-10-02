@@ -288,6 +288,7 @@ class SettingsActivity : ComponentActivity() {
         filesDir.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
         cacheDir.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
         getExternalFilesDir(null)?.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
+        runCatching { ManifestManager(applicationContext).getMediaDir() }.getOrNull()?.listFiles()?.forEach { runCatching { deleteRecursivelySafely(it) } }
     }
 
     private fun deleteRecursivelySafely(file: File) {

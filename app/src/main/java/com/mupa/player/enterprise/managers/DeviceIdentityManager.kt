@@ -23,16 +23,21 @@ class DeviceIdentityManager(private val context: Context) {
 
     suspend fun generateIfMissing(): String {
         val current = load()
+        // Uma vez salva e validada, a identidade nunca é trocada implicitamente aqui — só
+        // re-resolve quando não há nenhuma ainda. Isso já causou perda real de dados: com o
+        // WiFi desligado, a wlan0 some da lista de interfaces, resolveMacAddress() falha, e o
+        // fallback (resolveZebraStableId) lê ro.serialno/ro.boot.serialno — que em vários X96
+        // baratos vem de fábrica com o mesmo placeholder genérico ("1234567890", não-único
+        // entre aparelhos). Como esse valor "diferente mas válido" passava no validate(), o
+        // código sobrescrevia o id real (derivado do MAC, único) por esse placeholder a cada
+        // boot sem WiFi — perdendo o cadastro e o conteúdo já baixado, mesmo com tudo intacto
+        // em disco/banco sob o id antigo. Um troca de identidade legítima (ex.: device
+        // reaproveitado em outro hardware) passa pelo wipe completo, não por aqui.
+        if (!current.isNullOrBlank()) return current
+
         val best = resolveBestAvailableId()
-        if (current.isNullOrBlank()) {
-            save(best)
-            return best
-        }
-        if (best != current && validate(best)) {
-            save(best)
-            return best
-        }
-        return current
+        save(best)
+        return best
     }
 
     suspend fun save(deviceId: String) {
