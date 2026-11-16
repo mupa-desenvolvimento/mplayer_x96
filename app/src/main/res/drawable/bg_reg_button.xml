@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Botão roxo com gradiente; anel claro quando em foco, para o D-pad enxergar onde está. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <solid android:color="#B9B5E6" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <gradient android:angle="0" android:endColor="#4F46E5" android:startColor="#6D5DF6" />
+            <stroke android:width="3dp" android:color="#0B1220" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <gradient android:angle="0" android:endColor="#3F38C9" android:startColor="#5B4BE6" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient android:angle="0" android:endColor="#4F46E5" android:startColor="#6D5DF6" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+</selector>

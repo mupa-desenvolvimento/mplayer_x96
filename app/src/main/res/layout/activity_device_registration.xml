@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/enterprise_bg">
+    android:background="@drawable/bg_registration">
 
     <androidx.core.widget.NestedScrollView
         android:id="@+id/contentScroll"
@@ -19,182 +19,233 @@
         <androidx.constraintlayout.widget.ConstraintLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:paddingStart="16dp"
-            android:paddingTop="16dp"
-            android:paddingEnd="16dp"
-            android:paddingBottom="16dp">
+            android:paddingStart="24dp"
+            android:paddingTop="28dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="28dp">
 
-            <ImageView
-                android:id="@+id/logo"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:contentDescription="@string/app_name"
-                android:src="@drawable/ic_mplayer"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toTopOf="parent" />
-
-            <com.google.android.material.textview.MaterialTextView
-                android:id="@+id/title"
+            <LinearLayout
+                android:id="@+id/logoRow"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Cadastro do dispositivo"
-                android:textColor="@color/enterprise_on"
-                android:textSize="16sp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/logo" />
+                app:layout_constraintTop_toTopOf="parent">
+
+                <ImageView
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:contentDescription="@string/app_name"
+                    android:src="@drawable/ic_mupa_logo"
+                    android:tint="#8FE3FF" />
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:includeFontPadding="false"
+                    android:text="mupa"
+                    android:textColor="#FFFFFF"
+                    android:textSize="34sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/card"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                app:cardBackgroundColor="@color/enterprise_surface"
-                app:cardCornerRadius="20dp"
+                android:layout_marginTop="24dp"
+                app:cardBackgroundColor="#FFFFFF"
+                app:cardCornerRadius="24dp"
                 app:cardElevation="0dp"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/title"
-                app:layout_constraintWidth_max="620dp"
-                app:strokeColor="@color/mupa_cyan"
-                app:strokeWidth="1dp">
+                app:layout_constraintTop_toBottomOf="@id/logoRow"
+                app:layout_constraintWidth_max="520dp"
+                app:strokeWidth="0dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="28dp">
 
-                    <com.google.android.material.textview.MaterialTextView
-                        android:id="@+id/deviceIdLabel"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Device ID"
-                        android:textColor="@color/enterprise_on" />
-
-                    <com.google.android.material.textview.MaterialTextView
-                        android:id="@+id/deviceIdValue"
+                    <com.google.android.material.progressindicator.LinearProgressIndicator
+                        android:id="@+id/stepProgress"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:textColor="@color/mupa_cyan"
-                        android:textSize="12sp" />
+                        android:max="100"
+                        app:indicatorColor="#6C5CE7"
+                        app:indicatorTrackGapSize="0dp"
+                        app:trackColor="#E6EAF0"
+                        app:trackCornerRadius="3dp"
+                        app:trackStopIndicatorSize="0dp"
+                        app:trackThickness="5dp" />
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/manualDeviceIdLayout"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:visibility="gone"
-                        app:boxBackgroundMode="filled"
-                        app:boxStrokeColor="@color/mupa_cyan"
-                        app:hintTextColor="@color/enterprise_on">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/manualDeviceIdEdit"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="Digitar ID do Dispositivo (Manual)"
-                            android:inputType="text"
-                            android:textColor="@color/enterprise_on" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/companyCodeLayout"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        app:boxBackgroundMode="filled"
-                        app:boxStrokeColor="@color/mupa_cyan"
-                        app:hintTextColor="@color/enterprise_on">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/companyCodeEdit"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="Código empresa"
-                            android:inputType="text"
-                            android:textColor="@color/enterprise_on" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textview.MaterialTextView
-                        android:id="@+id/companyName"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:textColor="@color/enterprise_on"
-                        android:textSize="13sp" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/nicknameLayout"
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/backButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="?attr/selectableItemBackground"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:padding="4dp"
+                            android:text="← Voltar"
+                            android:textColor="#6C5CE7"
+                            android:textSize="13sp"
+                            android:textStyle="bold"
+                            android:visibility="invisible" />
+
+                        <View
+                            android:layout_width="0dp"
+                            android:layout_height="1dp"
+                            android:layout_weight="1" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/stepCounter"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textColor="#7B8499"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/stepContent"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        app:boxBackgroundMode="filled"
-                        app:boxStrokeColor="@color/mupa_cyan"
-                        app:hintTextColor="@color/enterprise_on">
+                        android:orientation="vertical">
 
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/nicknameEdit"
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/question"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:hint="Apelido do dispositivo"
+                            android:layout_marginTop="14dp"
+                            android:textColor="#0B1220"
+                            android:textSize="24sp"
+                            android:textStyle="bold" />
+
+                        <EditText
+                            android:id="@+id/answerEdit"
+                            android:layout_width="match_parent"
+                            android:layout_height="58dp"
+                            android:layout_marginTop="22dp"
+                            android:background="@drawable/bg_reg_input"
+                            android:hint="@string/app_name"
+                            android:imeOptions="actionNext"
+                            android:importantForAutofill="no"
                             android:inputType="text"
-                            android:textColor="@color/enterprise_on" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                            android:maxLines="1"
+                            android:paddingStart="18dp"
+                            android:paddingEnd="18dp"
+                            android:singleLine="true"
+                            android:textColor="#0B1220"
+                            android:textColorHint="#8A93A6"
+                            android:textSize="18sp" />
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/filialLayout"
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/companyNameText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="#0E9F6E"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+
+                        <androidx.core.widget.NestedScrollView
+                            android:id="@+id/tagsScroll"
+                            android:layout_width="match_parent"
+                            android:layout_height="210dp"
+                            android:layout_marginTop="18dp"
+                            android:fadeScrollbars="false"
+                            android:scrollbars="vertical"
+                            android:visibility="gone">
+
+                            <com.google.android.material.chip.ChipGroup
+                                android:id="@+id/tagsGroup"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                app:chipSpacingHorizontal="10dp"
+                                app:chipSpacingVertical="10dp" />
+                        </androidx.core.widget.NestedScrollView>
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/tagsStatusText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:textColor="#5B6478"
+                            android:textSize="14sp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/errorText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
-                        app:boxBackgroundMode="filled"
-                        app:boxStrokeColor="@color/mupa_cyan"
-                        app:hintTextColor="@color/enterprise_on">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/filialEdit"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="Número loja/filial"
-                            android:inputType="number"
-                            android:textColor="@color/enterprise_on" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                        android:textColor="#D92D20"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/registerButton"
+                        android:id="@+id/continueButton"
                         android:layout_width="match_parent"
-                        android:layout_height="48dp"
-                        android:layout_marginTop="14dp"
-                        android:text="Cadastrar dispositivo"
-                        app:backgroundTint="@color/mupa_cyan"
-                        app:cornerRadius="14dp" />
+                        android:layout_height="58dp"
+                        android:layout_marginTop="24dp"
+                        android:background="@drawable/bg_reg_button"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:text="Continuar →"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp"
+                        android:textStyle="bold"
+                        app:backgroundTint="@null" />
 
                     <com.google.android.material.progressindicator.LinearProgressIndicator
                         android:id="@+id/loading"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="12dp"
+                        android:indeterminate="true"
                         android:visibility="gone"
-                        app:indicatorColor="@color/mupa_cyan" />
+                        app:indicatorColor="#6C5CE7"
+                        app:trackColor="#E6EAF0" />
 
                     <com.google.android.material.textview.MaterialTextView
                         android:id="@+id/statusText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:textColor="@color/enterprise_on"
-                        android:textSize="12sp" />
+                        android:gravity="center"
+                        android:textColor="#5B6478"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
 
+                    <com.google.android.material.textview.MaterialTextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="18dp"
+                        android:gravity="center"
+                        android:text="Seus dados são usados só pra configurar este painel."
+                        android:textColor="#8A93A6"
+                        android:textSize="12sp" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
         </androidx.constraintlayout.widget.ConstraintLayout>
     </androidx.core.widget.NestedScrollView>
-
-
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/offlineOverlay"
@@ -214,7 +265,33 @@
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintVertical_bias="0.42" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/offlineHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Sem internet. Conecte o box a uma rede WiFi com acesso à internet."
+            android:textColor="@color/enterprise_on_muted"
+            android:textSize="13sp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/offlineText" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/offlineWifiButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:focusable="true"
+            android:text="Configurar WiFi"
+            app:backgroundTint="@color/mupa_cyan"
+            app:cornerRadius="14dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/offlineHint" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
@@ -224,8 +301,8 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="10dp"
         android:layout_marginBottom="10dp"
-        android:alpha="0.38"
-        android:textColor="@color/enterprise_on_muted"
+        android:alpha="0.5"
+        android:textColor="#B8C4D8"
         android:textSize="11sp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
