@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SÓ build debug: permite carregar páginas de teste via HTTP da rede local (ver DYNAMIC_CONTENT.md).
+     O release usa o network_security_config.xml de src/main, que bloqueia HTTP em claro. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
