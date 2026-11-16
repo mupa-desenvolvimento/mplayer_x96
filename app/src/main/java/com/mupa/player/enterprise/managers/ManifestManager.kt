@@ -37,7 +37,17 @@ data class ManifestItem(
     val endDate: String?,
     val startTime: String?,
     val endTime: String?,
-)
+    /** `price_table`: setor (Açougue, Padaria...) e lista de produtos do manifesto. */
+    val sector: String? = null,
+    val products: List<PriceProduct> = emptyList(),
+) {
+    /**
+     * `web` é uma página (URL HTTP), não um arquivo: nunca entra no download. `price_table` só
+     * baixa o fundo (em [url]), e só se houver um.
+     */
+    val needsDownload: Boolean
+        get() = !DynamicManifest.isWebType(type) && url.isNotBlank()
+}
 
 data class MediaSyncProgress(
     val completedItems: Int,
@@ -49,11 +59,26 @@ data class MediaSyncProgress(
 )
 
 class ManifestManager(private val context: Context) {
+    private companion object {
+        const val MANIFEST_OVERRIDE_FILE = "manifest.override.json"
+        val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
+    }
+
     private val api = SupabaseClient.createApi()
     private val db = AppDatabase.get(context)
     private val okHttp = TlsCompat.newClient()
 
     suspend fun fetchManifest(deviceId: String): String = withContext(Dispatchers.IO) {
+        // SÓ em build debug: permite testar web/price_table/overlays na TV sem depender de o
+        // painel ter um slide configurado (`adb push manifest.override.json /sdcard/mplayer_downloads/`).
+        if (BuildConfig.DEBUG) {
+            val override = File(getMediaDir(), MANIFEST_OVERRIDE_FILE)
+            if (override.isFile) {
+                val text = runCatching { override.readText().trim() }.getOrDefault("")
+                if (text.isNotBlank()) return@withContext text
+            }
+        }
+
         val token = BuildConfig.SUPABASE_TOKEN.trim()
         if (token.isBlank()) return@withContext ""
 
@@ -82,7 +107,7 @@ class ManifestManager(private val context: Context) {
     suspend fun compareManifest(deviceId: String, remoteJson: String): Boolean = withContext(Dispatchers.IO) {
         val local = db.manifestDao().getByDeviceId(deviceId)?.json?.trim().orEmpty()
         if (local.isBlank()) return@withContext false
-        return@withContext local == remoteJson.trim()
+        return@withContext DynamicManifest.fingerprint(local) == DynamicManifest.fingerprint(remoteJson)
     }
 
     suspend fun loadOfflineManifest(deviceId: String): String? = withContext(Dispatchers.IO) {
@@ -97,7 +122,9 @@ class ManifestManager(private val context: Context) {
         onProgress: ((MediaSyncProgress) -> Unit)? = null,
         maxConcurrentDownloads: Int = 2,
     ): List<MediaEntity> = withContext(Dispatchers.IO) {
-        val items = parseItems(manifestJson)
+        val allItems = parseItems(manifestJson)
+        // Itens `web` são páginas, não arquivos — nunca baixar a URL como mídia binária.
+        val items = allItems.filter { it.needsDownload }
         val mediaDir = getMediaDir()
         mediaDir.mkdirs()
 
@@ -216,7 +243,7 @@ class ManifestManager(private val context: Context) {
             }.awaitAll()
         }
 
-        cleanup(deviceId, items.map { it.id }.toSet(), mediaDir)
+        cleanup(deviceId, allItems.map { it.id }.toSet(), mediaDir)
         return@withContext result
     }
 
@@ -229,7 +256,8 @@ class ManifestManager(private val context: Context) {
     private suspend fun cleanup(@Suppress("UNUSED_PARAMETER") deviceId: String, keepMediaIds: Set<String>, mediaDir: File) {
         val files = mediaDir.listFiles().orEmpty()
         for (f in files) {
-            if (f.name == "manifest.json") continue
+            // manifest.json e o override de debug (manifest.override.json) não são mídia.
+            if (f.name.startsWith("manifest")) continue
             val id = f.name.substringBeforeLast('.', missingDelimiterValue = f.name)
             if (!keepMediaIds.contains(id)) {
                 runCatching { f.delete() }
@@ -319,9 +347,16 @@ class ManifestManager(private val context: Context) {
                 } else {
                     val id = obj.optString("id", "").ifBlank { obj.optString("media_id", "") }
                     val rawUrl = obj.optString("url", "").ifBlank { obj.optString("src", "") }
-                    val url = normalizeUrl(rawUrl)
+                    var url = normalizeUrl(rawUrl)
                     val type = obj.optString("type", "").lowercase().ifBlank { inferTypeFromUrl(url) }
-                    if (id.isBlank() || url.isBlank()) continue
+                    if (DynamicManifest.isPriceTableType(type)) {
+                        // Em price_table o arquivo baixável é o fundo. `url` pode não ser imagem,
+                        // então só serve de reserva se a extensão for de imagem.
+                        val bg = normalizeUrl(obj.optString("background_url", ""))
+                        url = bg.ifBlank { url.takeIf { looksLikeImageUrl(it) }.orEmpty() }
+                    }
+                    if (id.isBlank()) continue
+                    if (url.isBlank() && !DynamicManifest.isPriceTableType(type)) continue
 
                     val durationMs = obj.optLong("duration_ms").takeIf { it > 0 }
                         ?: (obj.optLong("duration").takeIf { it > 0 }?.let { it * 1000 })
@@ -353,6 +388,12 @@ class ManifestManager(private val context: Context) {
                         endDate = dtFim,
                         startTime = inicioFaixa,
                         endTime = fimFaixa,
+                        sector = obj.optString("sector", "").trim().takeIf { it.isNotEmpty() && it != "null" },
+                        products = if (DynamicManifest.isPriceTableType(type)) {
+                            DynamicManifest.parseProducts(obj.optJSONArray("products"))
+                        } else {
+                            emptyList()
+                        },
                     )
                     mediaIndex++
                 }
@@ -386,6 +427,11 @@ class ManifestManager(private val context: Context) {
             val fromDevice = device?.optJSONObject("price_config")
             fromDevice?.toString()
         }.getOrNull()
+    }
+
+    private fun looksLikeImageUrl(url: String): Boolean {
+        val clean = url.substringBefore('?').lowercase()
+        return IMAGE_EXTENSIONS.any { clean.endsWith(it) }
     }
 
     private fun inferTypeFromUrl(url: String): String {

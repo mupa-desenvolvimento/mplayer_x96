@@ -110,7 +110,7 @@ internal class VideoEngine(
         p.clearMediaItems()
         clearError(slot)
 
-        val uri = Uri.fromFile(item.file)
+        val uri = Uri.fromFile(requireNotNull(item.file) { "video item without local file" })
         val mediaItemBuilder = MediaItem.Builder().setUri(uri)
         val startMs = item.offsetStartMs ?: 0L
         val endMs = item.offsetEndMs

@@ -26,8 +26,8 @@ android {
         applicationId = "com.mupa.player.x96"
         minSdk = 21
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.0.0"
+        versionCode = 13
+        versionName = "1.1.0"
 
         // Dedicated to Android-9-and-below TV boxes with no camera/barcode scanner
         // (see DeviceIdentityManager.resolveMacAddress()) — every device running this

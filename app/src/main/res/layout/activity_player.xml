@@ -28,6 +28,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:scaleType="fitXY" />
+
+            <FrameLayout
+                android:id="@+id/webHostA"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+            <com.mupa.player.enterprise.player.PriceTableView
+                android:id="@+id/priceTableA"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
         </FrameLayout>
 
         <FrameLayout
@@ -49,8 +60,28 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:scaleType="fitXY" />
+
+            <FrameLayout
+                android:id="@+id/webHostB"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+            <com.mupa.player.enterprise.player.PriceTableView
+                android:id="@+id/priceTableB"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
         </FrameLayout>
     </FrameLayout>
+
+    <!-- Trilha 2 (L-Bar): WebView transparente em tela cheia sobre o player. Criada em código. -->
+    <FrameLayout
+        android:id="@+id/overlayWebHost"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="false"
+        android:focusable="false"
+        android:visibility="invisible" />
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/syncOverlay"
@@ -154,6 +185,42 @@
         </LinearLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- Device inoperante (licença/bloqueio/manutenção): o servidor manda um .svg que o app não decodifica. -->
+    <LinearLayout
+        android:id="@+id/inoperativeOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/enterprise_bg"
+        android:clickable="true"
+        android:focusable="false"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="28dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="92dp"
+            android:layout_height="92dp"
+            android:src="@drawable/ic_mplayer" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="Dispositivo inoperante"
+            android:textColor="@color/enterprise_on"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/inoperativeReasonText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="@color/enterprise_on_muted"
+            android:textSize="14sp" />
+    </LinearLayout>
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/deviceIdWatermark"
