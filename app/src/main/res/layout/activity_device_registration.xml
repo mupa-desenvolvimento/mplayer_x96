@@ -20,7 +20,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingStart="24dp"
-            android:paddingTop="28dp"
+            android:paddingTop="@dimen/reg_page_pad_top"
             android:paddingEnd="24dp"
             android:paddingBottom="28dp">
 
@@ -35,8 +35,8 @@
                 app:layout_constraintTop_toTopOf="parent">
 
                 <ImageView
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="@dimen/reg_logo_size"
+                    android:layout_height="@dimen/reg_logo_size"
                     android:contentDescription="@string/app_name"
                     android:src="@drawable/ic_mupa_logo"
                     android:tint="#8FE3FF" />
@@ -56,7 +56,7 @@
                 android:id="@+id/card"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="@dimen/reg_card_margin_top"
                 app:cardBackgroundColor="#FFFFFF"
                 app:cardCornerRadius="24dp"
                 app:cardElevation="0dp"
@@ -70,7 +70,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="28dp">
+                    android:padding="@dimen/reg_card_pad">
 
                     <com.google.android.material.progressindicator.LinearProgressIndicator
                         android:id="@+id/stepProgress"
@@ -129,7 +129,7 @@
                             android:id="@+id/question"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="14dp"
+                            android:layout_marginTop="@dimen/reg_question_top"
                             android:textColor="#0B1220"
                             android:textSize="24sp"
                             android:textStyle="bold" />
@@ -137,8 +137,8 @@
                         <EditText
                             android:id="@+id/answerEdit"
                             android:layout_width="match_parent"
-                            android:layout_height="58dp"
-                            android:layout_marginTop="22dp"
+                            android:layout_height="@dimen/reg_input_height"
+                            android:layout_marginTop="@dimen/reg_input_top"
                             android:background="@drawable/bg_reg_input"
                             android:hint="@string/app_name"
                             android:imeOptions="actionNext"
@@ -202,8 +202,8 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/continueButton"
                         android:layout_width="match_parent"
-                        android:layout_height="58dp"
-                        android:layout_marginTop="24dp"
+                        android:layout_height="@dimen/reg_button_height"
+                        android:layout_marginTop="@dimen/reg_button_top"
                         android:background="@drawable/bg_reg_button"
                         android:insetTop="0dp"
                         android:insetBottom="0dp"

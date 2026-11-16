@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Paisagem (TV box): o teclado na tela ocupa a metade de baixo; sem apertar o espaçamento ele
+         cobre o botão "Continuar". Tudo aqui sobe o botão pra ficar acima do teclado. -->
+    <dimen name="reg_page_pad_top">8dp</dimen>
+    <dimen name="reg_logo_size">34dp</dimen>
+    <dimen name="reg_card_margin_top">10dp</dimen>
+    <dimen name="reg_card_pad">20dp</dimen>
+    <dimen name="reg_question_top">6dp</dimen>
+    <dimen name="reg_input_top">14dp</dimen>
+    <dimen name="reg_input_height">52dp</dimen>
+    <dimen name="reg_button_top">14dp</dimen>
+    <dimen name="reg_button_height">52dp</dimen>
+</resources>
