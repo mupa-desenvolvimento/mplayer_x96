@@ -32,7 +32,12 @@ object SupabaseClient {
             chain.proceed(builder.build())
         }
 
+        // callTimeout limita a chamada INTEIRA (DNS + conexão + corpo): os timeouts padrão do
+        // OkHttp são por etapa, então com internet fraca uma resposta pingando byte a byte
+        // nunca estoura nenhum deles e a chamada pode ficar pendurada indefinidamente. Aqui são
+        // só chamadas JSON pequenas (manifesto, comandos, heartbeat), 20s é folga de sobra.
         val okHttp = TlsCompat.apply(OkHttpClient.Builder())
+            .callTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
             .addInterceptor(authInterceptor)
             .build()
 

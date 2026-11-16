@@ -78,7 +78,14 @@ class SplashActivity : ComponentActivity() {
 
             binding.stepText.text = "2 Validando cadastro"
             val nextIntent = if (isOnline()) {
-                when (val result = DeviceValidationService(applicationContext).validateDevice(deviceId)) {
+                // Com WiFi ligado mas internet ruim/inexistente, o isOnline() acima é true e a
+                // chamada ao servidor pode pendurar por dezenas de segundos (DNS + timeouts do
+                // OkHttp) ANTES de o player abrir. Já existe fallback pra cadastro em cache
+                // (branches Error/NotConfigured), então estourar o prazo só cai nele mais rápido.
+                val validation = withTimeoutOrNull(VALIDATION_TIMEOUT_MS) {
+                    DeviceValidationService(applicationContext).validateDevice(deviceId)
+                } ?: DeviceValidationResult.Error("timeout")
+                when (val result = validation) {
                     is DeviceValidationResult.Found -> {
                         val serial = result.cache.deviceId.ifBlank { deviceId }
                         Intent(this@SplashActivity, PlayerActivity::class.java)
@@ -126,6 +133,10 @@ class SplashActivity : ComponentActivity() {
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private companion object {
+        const val VALIDATION_TIMEOUT_MS = 5_000L
     }
 
     private fun applyAlwaysOnScreen() {

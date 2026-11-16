@@ -855,8 +855,29 @@ class PlayerActivity : ComponentActivity() {
         return "$h:$m:$s"
     }
 
+    /**
+     * Horário usado pra avaliar vigência — nunca anterior ao último horário confiável visto.
+     *
+     * Esses TV boxes não têm relógio de bateria: num boot a frio SEM rede o relógio volta pra
+     * 31/12/1969 até o NTP sincronizar. Pra vigência (`dt_inicio` 2026-04-13 etc.) "hoje" passava
+     * a ser 1969 e TODO item virava "ainda não vigente" — playlist offline vazia, e o app caía
+     * na tela "Aguardando conexão" mesmo com o conteúdo inteiro baixado em disco. O horário só é
+     * gravado quando há internet (relógio provavelmente certo) e plausível, pra não congelar um
+     * valor errado; quando o NTP volta, o relógio real (maior) assume sozinho.
+     */
+    private fun effectiveNowMs(): Long {
+        val prefs = applicationContext.getSharedPreferences("mupa_clock_legacy", Context.MODE_PRIVATE)
+        val sys = System.currentTimeMillis()
+        val lastTrusted = prefs.getLong("last_trusted_ms", 0L)
+        if (sys >= MIN_PLAUSIBLE_CLOCK_MS && sys - lastTrusted >= 60_000L && isOnline()) {
+            prefs.edit().putLong("last_trusted_ms", sys).apply()
+            return sys
+        }
+        return maxOf(sys, lastTrusted)
+    }
+
     private fun isItemCurrentlyActive(item: com.mupa.player.enterprise.managers.ManifestItem): Boolean {
-        val now = Date()
+        val now = Date(effectiveNowMs())
 
         // 1. Validar Vigência por Data (AAAA-MM-DD, no fuso do dispositivo)
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -1265,6 +1286,22 @@ class PlayerActivity : ComponentActivity() {
         binding.syncFileText.visibility = if (fileText.isNotBlank()) View.VISIBLE else View.GONE
         binding.syncDetailText.visibility = if (detailText.isNotBlank()) View.VISIBLE else View.GONE
 
+        // Esperando rede com NADA local pra tocar (overlay em tela cheia): sem esse botão o
+        // box ficava preso nessa tela sem como chegar nas configurações de WiFi.
+        val waitingForNetwork = status.startsWith("Sem internet") || status.startsWith("Não foi possível obter")
+        val wifiButton = binding.syncWifiButton
+        if (waitingForNetwork && wifiButton.visibility != View.VISIBLE) {
+            wifiButton.setOnClickListener {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            }
+            wifiButton.visibility = View.VISIBLE
+            wifiButton.requestFocus()
+        } else if (!waitingForNetwork) {
+            wifiButton.visibility = View.GONE
+        }
+
         val p = progressPercent
         if (p == null) {
             binding.syncProgressBar.isIndeterminate = true
@@ -1326,6 +1363,9 @@ class PlayerActivity : ComponentActivity() {
 
         /** Reavaliação da vigência (data / faixa horária) dos itens já baixados. */
         private const val ACTIVE_ITEMS_CHECK_MS = 60 * 1000L
+
+        /** 2026-01-01 UTC — qualquer relógio abaixo disso é o relógio zerado do boot, não a hora real. */
+        private const val MIN_PLAUSIBLE_CLOCK_MS = 1_767_225_600_000L
 
         /** Heartbeat de saúde do device (ver [heartbeatLoop]) — primeiro ciclo e intervalo fixo. */
         private const val HEARTBEAT_FIRST_DELAY_MS = 20 * 1000L
