@@ -16,9 +16,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
+import com.mupa.player.enterprise.BuildConfig
 import com.mupa.player.enterprise.databinding.ActivitySplashBinding
 import com.mupa.player.enterprise.managers.DeviceCacheManager
 import com.mupa.player.enterprise.managers.DeviceIdentityManager
+import com.mupa.player.enterprise.managers.ManifestManager
+import java.io.File
 import com.mupa.player.enterprise.services.DeviceValidationResult
 import com.mupa.player.enterprise.services.DeviceValidationService
 import kotlinx.coroutines.CompletableDeferred
@@ -77,7 +80,9 @@ class SplashActivity : ComponentActivity() {
             val cachedRegistered = cached?.takeIf { it.deviceRegistered }?.deviceId?.trim().orEmpty()
 
             binding.stepText.text = "2 Validando cadastro"
-            val nextIntent = if (isOnline()) {
+            val nextIntent = if (forceRegistrationRequested()) {
+                Intent(this@SplashActivity, DeviceRegistrationActivity::class.java)
+            } else if (isOnline()) {
                 // Com WiFi ligado mas internet ruim/inexistente, o isOnline() acima é true e a
                 // chamada ao servidor pode pendurar por dezenas de segundos (DNS + timeouts do
                 // OkHttp) ANTES de o player abrir. Já existe fallback pra cadastro em cache
@@ -125,6 +130,18 @@ class SplashActivity : ComponentActivity() {
             startActivity(nextIntent)
             finish()
         }
+    }
+
+    /**
+     * SÓ em build debug: com o arquivo `force_registration` em /sdcard/mplayer_downloads, abre a
+     * tela de cadastro mesmo com o serial já cadastrado no servidor — é a única forma de ver o
+     * assistente numa box já registrada sem apagar o cadastro real. Apague o arquivo ao terminar.
+     */
+    private fun forceRegistrationRequested(): Boolean {
+        if (!BuildConfig.DEBUG) return false
+        return runCatching {
+            File(ManifestManager(applicationContext).getMediaDir(), "force_registration").isFile
+        }.getOrDefault(false)
     }
 
     private fun isOnline(): Boolean {
