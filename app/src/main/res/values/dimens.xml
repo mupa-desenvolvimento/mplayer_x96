@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Espaçamentos do cadastro em passo a passo (retrato). Em paisagem veja values-land/dimens.xml. -->
+    <dimen name="reg_page_pad_top">28dp</dimen>
+    <dimen name="reg_logo_size">44dp</dimen>
+    <dimen name="reg_card_margin_top">24dp</dimen>
+    <dimen name="reg_card_pad">28dp</dimen>
+    <dimen name="reg_question_top">14dp</dimen>
+    <dimen name="reg_input_top">22dp</dimen>
+    <dimen name="reg_input_height">58dp</dimen>
+    <dimen name="reg_button_top">24dp</dimen>
+    <dimen name="reg_button_height">58dp</dimen>
+</resources>

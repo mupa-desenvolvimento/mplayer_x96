@@ -18,18 +18,39 @@ class PlayerEngine(
     data class PlaybackItem(
         val id: String,
         val type: String,
-        val file: File,
+        /** Vídeo/imagem: o arquivo local. `price_table`: o fundo (opcional). `web`: sempre null. */
+        val file: File?,
         val durationMs: Long?,
         val volume: Float?,
         val offsetStartMs: Long?,
         val offsetEndMs: Long?,
+        /** `type == "web"`: página exibida em WebView (nunca baixada). */
+        val webUrl: String? = null,
+        /** `type == "price_table"`: dados desenhados nativamente. */
+        val priceTable: PriceTableData? = null,
     )
 
     data class LayerViews(
         val container: View,
         val playerView: PlayerView,
         val imageView: ImageView,
+        /** Hospeda a WebView dos itens `web` (criada sob demanda, destruída ao sair da camada). */
+        val webHost: android.widget.FrameLayout,
+        val priceTableView: PriceTableView,
     )
+
+    /** Avisos do motor para quem coordena a Trilha 2 (overlays). Sempre chamados na thread principal. */
+    interface PlaybackListener {
+        /** Um novo ciclo da playlist começou (índice 0 entrou em cena). */
+        fun onCycleStart()
+
+        /** O item [type] passou a ser o exibido na Trilha 1. */
+        fun onItemShown(type: String)
+    }
+
+    fun setPlaybackListener(listener: PlaybackListener?) {
+        playlistEngine.listener = listener
+    }
 
     private val profile = PlaybackProfile.detect(context.applicationContext)
     private val videoEngine = VideoEngine(context.applicationContext, profile, layerA, layerB)

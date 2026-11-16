@@ -37,11 +37,16 @@ import com.mupa.player.enterprise.BuildConfig
 import com.mupa.player.enterprise.databinding.ActivityPlayerBinding
 import com.mupa.player.enterprise.managers.DeviceCacheManager
 import com.mupa.player.enterprise.managers.DeviceIdentityManager
+import com.mupa.player.enterprise.managers.DynamicManifest
 import com.mupa.player.enterprise.managers.ManifestManager
 import com.mupa.player.enterprise.managers.MediaSyncProgress
+import com.mupa.player.enterprise.managers.OperationalState
 import com.mupa.player.enterprise.managers.SettingsManager
+import com.mupa.player.enterprise.player.OverlayController
 import com.mupa.player.enterprise.player.PlaybackProfile
 import com.mupa.player.enterprise.player.PlayerEngine
+import com.mupa.player.enterprise.player.PriceTableData
+import com.mupa.player.enterprise.services.DevicePingService
 import com.mupa.player.enterprise.player.PlayerTelemetry
 import com.mupa.player.enterprise.player.PlayerTelemetrySink
 import com.mupa.player.enterprise.player.TransitionConfig
@@ -83,7 +88,11 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var binding: ActivityPlayerBinding
     private lateinit var deviceId: String
     private lateinit var playerEngine: PlayerEngine
+    private lateinit var overlayController: OverlayController
     private lateinit var manifestManager: ManifestManager
+
+    /** Servidor marcou o device como inoperante (licença/bloqueio/manutenção) — ver [applyOperationalState]. */
+    private var inoperative = false
     private var playlistName: String? = null
     private var itemNameById: Map<String, String> = emptyMap()
     private var companyId: String? = null
@@ -159,14 +168,34 @@ class PlayerActivity : ComponentActivity() {
                 container = binding.layerA,
                 playerView = binding.playerViewA,
                 imageView = binding.imageViewA,
+                webHost = binding.webHostA,
+                priceTableView = binding.priceTableA,
             ),
             layerB = PlayerEngine.LayerViews(
                 container = binding.layerB,
                 playerView = binding.playerViewB,
                 imageView = binding.imageViewB,
+                webHost = binding.webHostB,
+                priceTableView = binding.priceTableB,
             ),
             telemetrySink = PlayerTelemetrySink { t -> lastTelemetry = t },
         )
+
+        // Trilha 2 (L-Bar). Só observa o motor; nunca atrasa uma troca da Trilha 1.
+        overlayController = OverlayController(
+            overlayHost = binding.overlayWebHost,
+            playerContainer = binding.playerContainer,
+            playerViews = listOf(binding.playerViewA, binding.playerViewB),
+            imageViews = listOf(binding.imageViewA, binding.imageViewB),
+            scope = lifecycleScope,
+            useSoftwareLayer = {
+                // Chave local pra trocar a camada de composição se algum firmware X96 mostrar
+                // artefato na transparência: SharedPreferences "mupa_web_slides" / overlay_software_layer.
+                getSharedPreferences("mupa_web_slides", Context.MODE_PRIVATE).getBoolean("overlay_software_layer", false)
+            },
+            hasNetwork = { isOnline() },
+        )
+        playerEngine.setPlaybackListener(overlayController)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {}
@@ -244,6 +273,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        overlayController.release()
         playerEngine.release()
         super.onDestroy()
     }
@@ -288,6 +318,7 @@ class PlayerActivity : ComponentActivity() {
         scope.launch { remoteRefreshLoop() }
         scope.launch { commandPollLoop() }
         scope.launch { heartbeatLoop() }
+        scope.launch { pingLoop() }
 
         // O socket do Realtime é a exceção: vive no lifecycleScope (morre só no onDestroy) e não
         // no escopo do repeatOnLifecycle, com guarda de instância única.
@@ -855,8 +886,29 @@ class PlayerActivity : ComponentActivity() {
         return "$h:$m:$s"
     }
 
+    /**
+     * Horário usado pra avaliar vigência — nunca anterior ao último horário confiável visto.
+     *
+     * Esses TV boxes não têm relógio de bateria: num boot a frio SEM rede o relógio volta pra
+     * 31/12/1969 até o NTP sincronizar. Pra vigência (`dt_inicio` 2026-04-13 etc.) "hoje" passava
+     * a ser 1969 e TODO item virava "ainda não vigente" — playlist offline vazia, e o app caía
+     * na tela "Aguardando conexão" mesmo com o conteúdo inteiro baixado em disco. O horário só é
+     * gravado quando há internet (relógio provavelmente certo) e plausível, pra não congelar um
+     * valor errado; quando o NTP volta, o relógio real (maior) assume sozinho.
+     */
+    private fun effectiveNowMs(): Long {
+        val prefs = applicationContext.getSharedPreferences("mupa_clock_legacy", Context.MODE_PRIVATE)
+        val sys = System.currentTimeMillis()
+        val lastTrusted = prefs.getLong("last_trusted_ms", 0L)
+        if (sys >= MIN_PLAUSIBLE_CLOCK_MS && sys - lastTrusted >= 60_000L && isOnline()) {
+            prefs.edit().putLong("last_trusted_ms", sys).apply()
+            return sys
+        }
+        return maxOf(sys, lastTrusted)
+    }
+
     private fun isItemCurrentlyActive(item: com.mupa.player.enterprise.managers.ManifestItem): Boolean {
-        val now = Date()
+        val now = Date(effectiveNowMs())
 
         // 1. Validar Vigência por Data (AAAA-MM-DD, no fuso do dispositivo)
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -960,16 +1012,89 @@ class PlayerActivity : ComponentActivity() {
 
         return items.mapNotNull { item ->
             if (!isItemCurrentlyActive(item)) return@mapNotNull null
-            val file = mediaIndex[item.id] ?: return@mapNotNull null
-            PlayerEngine.PlaybackItem(
-                id = item.id,
-                type = item.type,
-                file = file,
-                durationMs = item.durationMs,
-                volume = item.volume,
-                offsetStartMs = item.offsetStartMs,
-                offsetEndMs = item.offsetEndMs,
-            )
+            when {
+                // Página dinâmica (clima, aniversariantes, notícias...): não tem arquivo local.
+                // O motor carrega a URL numa WebView e pula o item se não carregar.
+                DynamicManifest.isWebType(item.type) -> PlayerEngine.PlaybackItem(
+                    id = item.id,
+                    type = item.type,
+                    file = null,
+                    durationMs = item.durationMs,
+                    volume = 0f,
+                    offsetStartMs = null,
+                    offsetEndMs = null,
+                    webUrl = item.url,
+                )
+                // Tabela de preços: produtos vêm do manifesto; o fundo (se houver) é arquivo baixado.
+                DynamicManifest.isPriceTableType(item.type) -> {
+                    val background = if (item.url.isNotBlank()) (mediaIndex[item.id] ?: return@mapNotNull null) else null
+                    PlayerEngine.PlaybackItem(
+                        id = item.id,
+                        type = item.type,
+                        file = background,
+                        durationMs = item.durationMs,
+                        volume = 0f,
+                        offsetStartMs = null,
+                        offsetEndMs = null,
+                        priceTable = PriceTableData(item.sector, item.products),
+                    )
+                }
+                else -> {
+                    val file = mediaIndex[item.id] ?: return@mapNotNull null
+                    PlayerEngine.PlaybackItem(
+                        id = item.id,
+                        type = item.type,
+                        file = file,
+                        durationMs = item.durationMs,
+                        volume = item.volume,
+                        offsetStartMs = item.offsetStartMs,
+                        offsetEndMs = item.offsetEndMs,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Estado operacional + overlays da Trilha 2 do manifesto que acabou de ser aplicado. */
+    private fun applyDynamicFromManifestJson(manifestJson: String) {
+        applyOperationalState(DynamicManifest.parseOperationalState(manifestJson))
+        overlayController.setOverlays(DynamicManifest.parseOverlays(manifestJson))
+    }
+
+    /**
+     * Device inoperante (sem licença, bloqueado, em manutenção, tenant suspenso): tela nativa
+     * por cima de tudo, áudio parado e overlay derrubado. O servidor manda um `.svg` que o app
+     * não decodifica, então não dá pra depender dele pra mostrar o estado.
+     */
+    private fun applyOperationalState(state: OperationalState) {
+        val nowInoperative = !state.isOperante
+        binding.inoperativeReasonText.text = state.reason.orEmpty()
+        if (nowInoperative == inoperative) return
+        inoperative = nowInoperative
+        binding.inoperativeOverlay.visibility = if (nowInoperative) View.VISIBLE else View.GONE
+        overlayController.setSuspended(nowInoperative)
+        if (nowInoperative) playerEngine.pause() else playerEngine.resume()
+        Log.i(TAG_SYNC, "estado operacional: inoperante=$nowInoperative motivo=${state.reason}")
+    }
+
+    /**
+     * `ping` leve a cada minuto: derruba ou devolve o painel sem esperar o ciclo de manifesto.
+     * Falha de rede nunca muda o estado — só uma resposta explícita do servidor.
+     */
+    private suspend fun pingLoop() {
+        delay(PING_FIRST_DELAY_MS)
+        val service = DevicePingService()
+        while (true) {
+            val state = runCatching { service.ping(deviceId) }.getOrNull()
+            if (state != null) {
+                val wasInoperative = inoperative
+                applyOperationalState(state)
+                if (wasInoperative && state.isOperante) {
+                    // Voltou: o manifesto salvo ainda pode ser o do estado inoperante.
+                    runCatching { refreshInBackground() }
+                }
+            }
+            delay(PING_INTERVAL_MS)
         }
     }
 
@@ -1157,6 +1282,9 @@ class PlayerActivity : ComponentActivity() {
 
 
     private fun applyTransitionConfigFromManifestJson(manifestJson: String) {
+        // Todo ponto que aplica um manifesto passa por aqui, então é o lugar certo pra também
+        // aplicar o que é do contrato dinâmico (estado operacional e overlays da Trilha 2).
+        applyDynamicFromManifestJson(manifestJson)
         val cfg = parseTransitionConfigFromManifestJson(manifestJson) ?: return
         playerEngine.setTransitionConfig(cfg)
     }
@@ -1265,6 +1393,22 @@ class PlayerActivity : ComponentActivity() {
         binding.syncFileText.visibility = if (fileText.isNotBlank()) View.VISIBLE else View.GONE
         binding.syncDetailText.visibility = if (detailText.isNotBlank()) View.VISIBLE else View.GONE
 
+        // Esperando rede com NADA local pra tocar (overlay em tela cheia): sem esse botão o
+        // box ficava preso nessa tela sem como chegar nas configurações de WiFi.
+        val waitingForNetwork = status.startsWith("Sem internet") || status.startsWith("Não foi possível obter")
+        val wifiButton = binding.syncWifiButton
+        if (waitingForNetwork && wifiButton.visibility != View.VISIBLE) {
+            wifiButton.setOnClickListener {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            }
+            wifiButton.visibility = View.VISIBLE
+            wifiButton.requestFocus()
+        } else if (!waitingForNetwork) {
+            wifiButton.visibility = View.GONE
+        }
+
         val p = progressPercent
         if (p == null) {
             binding.syncProgressBar.isIndeterminate = true
@@ -1326,6 +1470,13 @@ class PlayerActivity : ComponentActivity() {
 
         /** Reavaliação da vigência (data / faixa horária) dos itens já baixados. */
         private const val ACTIVE_ITEMS_CHECK_MS = 60 * 1000L
+
+        /** 2026-01-01 UTC — qualquer relógio abaixo disso é o relógio zerado do boot, não a hora real. */
+        private const val MIN_PLAUSIBLE_CLOCK_MS = 1_767_225_600_000L
+
+        /** `ping` de estado operacional (ver [pingLoop]). */
+        private const val PING_FIRST_DELAY_MS = 15 * 1000L
+        private const val PING_INTERVAL_MS = 60 * 1000L
 
         /** Heartbeat de saúde do device (ver [heartbeatLoop]) — primeiro ciclo e intervalo fixo. */
         private const val HEARTBEAT_FIRST_DELAY_MS = 20 * 1000L
